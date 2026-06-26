@@ -52,9 +52,10 @@ def register() -> None:
         name="Fit Check Pose",
         description="Pose to apply for the temporary fit check",
         items=[
+            ("original", "Original", "Restore the saved pre-fit-check pose"),
             ("neutral", "Neutral", ""),
-            ("arms_up", "Arms Up", ""),
-            ("legs_out", "Legs Out", ""),
+            ("a_pose", "A-Pose", ""),
+            ("t_pose", "T-Pose", ""),
         ],
         default="neutral",
     )

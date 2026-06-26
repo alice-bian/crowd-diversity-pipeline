@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
 
 import bpy
+from mathutils import Matrix
 
 from .core import build_export_output_path, build_metadata, write_metadata_sidecar
 
@@ -84,7 +86,9 @@ class CROWD_OT_ExportAssets(bpy.types.Operator):
 class CROWD_OT_RunFitCheck(bpy.types.Operator):
     bl_idname = "crowd_diversity.run_fit_check"
     bl_label = "Run Fit Check"
-    bl_description = "Create a temporary duplicate of the selected garments and pose them for quick clipping review"
+    bl_description = "Pose the original rig(s) for quick clipping review and optionally restore the original pose"
+
+    _ORIGINAL_POSE_KEY = "crowd_diversity_original_pose"
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         objects = [obj for obj in context.selected_objects if obj.type == "MESH"]
@@ -92,41 +96,80 @@ class CROWD_OT_RunFitCheck(bpy.types.Operator):
             self.report({"ERROR"}, "Select one or more mesh objects to fit-check.")
             return {"CANCELLED"}
 
-        collection_name = "Crowd Diversity Fit Check"
-        collection = bpy.data.collections.get(collection_name)
-        if collection is None:
-            collection = bpy.data.collections.new(collection_name)
-            context.scene.collection.children.link(collection)
-
+        armatures: list[bpy.types.Object] = []
+        seen_armatures: set[str] = set()
         for obj in objects:
-            duplicate = obj.copy()
-            duplicate.data = obj.data.copy()
-            collection.objects.link(duplicate)
-
-            armature = self._find_armature(context)
+            armature = self._find_armature_for_object(context, obj)
             if armature is None:
-                self.report({"WARNING"}, f"No armature found for {obj.name}; skipping fit check setup.")
+                self.report({"WARNING"}, f"No armature found for {obj.name}; skipping.")
                 continue
 
-            temp_armature = armature.copy()
-            temp_armature.data = armature.data.copy()
-            collection.objects.link(temp_armature)
-            temp_armature.name = f"{armature.name}_fit_check"
+            if armature.name in seen_armatures:
+                continue
 
-            modifier = duplicate.modifiers.new(name="Armature", type="ARMATURE")
-            modifier.object = temp_armature
-            self._apply_pose(temp_armature, context.scene.crowd_diversity_fit_check_pose)
+            seen_armatures.add(armature.name)
+            armatures.append(armature)
 
-            duplicate.select_set(True)
-            context.view_layer.objects.active = duplicate
+        if not armatures:
+            self.report({"ERROR"}, "No armatures were found from selected meshes.")
+            return {"CANCELLED"}
+
+        pose_name = context.scene.crowd_diversity_fit_check_pose
+        for armature in armatures:
+            if pose_name != "original":
+                self._capture_original_pose(armature)
+            self._apply_pose(armature, pose_name)
+
+        self.report({"INFO"}, f"Applied {pose_name} to {len(armatures)} armature(s).")
 
         return {"FINISHED"}
 
-    def _find_armature(self, context: bpy.types.Context) -> bpy.types.Object | None:
-        for obj in context.scene.objects:
-            if obj.type == "ARMATURE":
-                return obj
+    def _find_armature_for_object(self, context: bpy.types.Context, obj: bpy.types.Object) -> bpy.types.Object | None:
+        if obj.parent is not None and obj.parent.type == "ARMATURE":
+            return obj.parent
+
+        for modifier in obj.modifiers:
+            if modifier.type == "ARMATURE" and modifier.object is not None:
+                return modifier.object
+
+        for scene_obj in context.scene.objects:
+            if scene_obj.type == "ARMATURE":
+                return scene_obj
+
         return None
+
+    def _capture_original_pose(self, armature: bpy.types.Object) -> None:
+        if self._ORIGINAL_POSE_KEY in armature:
+            return
+
+        pose_data: dict[str, list[float]] = {}
+        for bone in armature.pose.bones:
+            pose_data[bone.name] = [value for row in bone.matrix_basis for value in row]
+
+        armature[self._ORIGINAL_POSE_KEY] = json.dumps(pose_data)
+
+    def _restore_original_pose(self, armature: bpy.types.Object) -> bool:
+        if self._ORIGINAL_POSE_KEY not in armature:
+            return False
+
+        raw_data = armature.get(self._ORIGINAL_POSE_KEY)
+        if not isinstance(raw_data, str):
+            return False
+
+        try:
+            pose_data = json.loads(raw_data)
+        except json.JSONDecodeError:
+            return False
+
+        for bone in armature.pose.bones:
+            values = pose_data.get(bone.name)
+            if not values or len(values) != 16:
+                continue
+
+            rows = [values[0:4], values[4:8], values[8:12], values[12:16]]
+            bone.matrix_basis = Matrix(rows)
+
+        return True
 
     def _apply_pose(self, armature: bpy.types.Object, pose_name: str) -> None:
         bpy.ops.object.select_all(action="DESELECT")
@@ -134,26 +177,34 @@ class CROWD_OT_RunFitCheck(bpy.types.Operator):
         bpy.context.view_layer.objects.active = armature
         bpy.ops.object.mode_set(mode="POSE")
 
+        if pose_name == "original":
+            restored = self._restore_original_pose(armature)
+            if not restored:
+                for bone in armature.pose.bones:
+                    bone.rotation_euler.zero()
+            bpy.ops.object.mode_set(mode="OBJECT")
+            return
+
         for bone in armature.pose.bones:
             bone.rotation_euler.zero()
 
-        if pose_name == "arms_up":
+        if pose_name == "a_pose":
             for bone in armature.pose.bones:
                 name = bone.name.lower()
                 if "upper_arm" in name or "shoulder" in name:
                     if "left" in name or ".l" in name or name.endswith("l"):
-                        bone.rotation_euler = (0.0, 0.0, 0.7)
+                        bone.rotation_euler = (0.0, 0.0, 0.45)
                     elif "right" in name or ".r" in name or name.endswith("r"):
-                        bone.rotation_euler = (0.0, 0.0, -0.7)
-                elif "spine" in name and "spine" in name:
+                        bone.rotation_euler = (0.0, 0.0, -0.45)
+                elif "spine" in name:
                     bone.rotation_euler = (0.15, 0.0, 0.0)
-        elif pose_name == "legs_out":
+        elif pose_name == "t_pose":
             for bone in armature.pose.bones:
                 name = bone.name.lower()
-                if "thigh" in name or "leg" in name:
+                if "upper_arm" in name or "shoulder" in name:
                     if "left" in name or ".l" in name or name.endswith("l"):
-                        bone.rotation_euler = (0.0, 0.35, 0.0)
+                        bone.rotation_euler = (0.0, 0.0, 0.9)
                     elif "right" in name or ".r" in name or name.endswith("r"):
-                        bone.rotation_euler = (0.0, -0.35, 0.0)
+                        bone.rotation_euler = (0.0, 0.0, -0.9)
 
         bpy.ops.object.mode_set(mode="OBJECT")
