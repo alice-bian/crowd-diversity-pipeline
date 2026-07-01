@@ -40,7 +40,7 @@ def register() -> None:
 
     bpy.types.Object.crowd_diversity_category = bpy.props.EnumProperty(
         name="Category",
-        description="Type for this selected garment or hairstyle",
+        description="Type for this selected garment, hairstyle, accessory, or character body",
         items=[(key, label, "") for key, label in CATEGORY_LABELS.items()],
         default="top",
     )

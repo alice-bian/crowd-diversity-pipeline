@@ -64,7 +64,7 @@ def _prepare_export_duplicates(
 class CROWD_OT_ExportAssets(bpy.types.Operator):
     bl_idname = "crowd_diversity.export_assets"
     bl_label = "Export Selected Assets"
-    bl_description = "Export the selected rigged garment meshes as USD files and write metadata sidecars"
+    bl_description = "Export selected rigged meshes (garments, accessories, or character body) as USD files with metadata sidecars"
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         prefs = find_addon_preferences(context, __package__ or __name__)

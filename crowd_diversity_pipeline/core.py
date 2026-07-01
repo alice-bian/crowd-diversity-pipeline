@@ -22,6 +22,7 @@ except ImportError:  # pragma: no cover - exercised in plain Python test environ
     bpy = _BpyStub()
 
 CATEGORY_FOLDERS = {
+    "character_body": "character_bodies",
     "hair": "hair",
     "top": "tops",
     "bottom": "bottoms",
@@ -30,6 +31,7 @@ CATEGORY_FOLDERS = {
 }
 
 CATEGORY_LABELS = {
+    "character_body": "Character Body",
     "hair": "Hair",
     "top": "Top",
     "bottom": "Bottom",
@@ -38,6 +40,7 @@ CATEGORY_LABELS = {
 }
 
 DEFAULT_SLOTS = {
+    "character_body": "body",
     "hair": "head",
     "top": "torso",
     "bottom": "legs",
