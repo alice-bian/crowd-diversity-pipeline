@@ -61,6 +61,47 @@ def _prepare_export_duplicates(
     return mesh_copy, armature_copy, temp_objects
 
 
+def _next_default_rig_name(scene: bpy.types.Scene) -> str:
+    existing_names = {rig.name.strip() for rig in scene.crowd_diversity_rigs if rig.name.strip()}
+    rig_number = 1
+    while f"new_rig{rig_number}" in existing_names:
+        rig_number += 1
+    return f"new_rig{rig_number}"
+
+
+class CROWD_OT_AddRig(bpy.types.Operator):
+    bl_idname = "crowd_diversity.add_rig"
+    bl_label = "Add Rig"
+    bl_description = "Add a new rig ID to the scene rig list"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        rig_item = context.scene.crowd_diversity_rigs.add()
+        rig_item.name = _next_default_rig_name(context.scene)
+        context.scene.crowd_diversity_rigs_index = len(context.scene.crowd_diversity_rigs) - 1
+        return {"FINISHED"}
+
+
+class CROWD_OT_RemoveRig(bpy.types.Operator):
+    bl_idname = "crowd_diversity.remove_rig"
+    bl_label = "Remove Rig"
+    bl_description = "Remove a rig ID from the scene rig list"
+
+    index: bpy.props.IntProperty(name="Index", default=-1)
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        rigs = context.scene.crowd_diversity_rigs
+        if not rigs:
+            return {"CANCELLED"}
+
+        idx = self.index if 0 <= self.index < len(rigs) else context.scene.crowd_diversity_rigs_index
+        if idx < 0 or idx >= len(rigs):
+            return {"CANCELLED"}
+
+        rigs.remove(idx)
+        context.scene.crowd_diversity_rigs_index = min(max(0, idx - 1), max(0, len(rigs) - 1))
+        return {"FINISHED"}
+
+
 class CROWD_OT_ExportAssets(bpy.types.Operator):
     bl_idname = "crowd_diversity.export_assets"
     bl_label = "Export Selected Assets"
@@ -84,8 +125,19 @@ class CROWD_OT_ExportAssets(bpy.types.Operator):
             self.report({"ERROR"}, "Select one or more mesh objects to export.")
             return {"CANCELLED"}
 
+        scene_rig_ids = {rig.name.strip() for rig in context.scene.crowd_diversity_rigs if rig.name.strip()}
+        exported_count = 0
+        skipped_count = 0
+
         for obj in objects:
             category = obj.crowd_diversity_category
+            compatible_rig = (obj.crowd_diversity_compatible_rig or "").strip()
+
+            if not compatible_rig or compatible_rig not in scene_rig_ids:
+                skipped_count += 1
+                self.report({"WARNING"}, f"Skipped {obj.name}: assign a valid Rig ID before export.")
+                continue
+
             export_path = build_export_output_path(library_root, category, obj.name)
             export_dir = os.path.dirname(export_path)
             os.makedirs(export_dir, exist_ok=True)
@@ -117,9 +169,11 @@ class CROWD_OT_ExportAssets(bpy.types.Operator):
                 category=category,
                 object_name=obj.name,
                 source_file=bpy.data.filepath,
+                compatible_rig=compatible_rig,
             )
             write_metadata_sidecar(export_path, metadata)
             self.report({"INFO"}, f"Exported {obj.name} to {export_path}")
+            exported_count += 1
 
         # Clear all selections in the viewport after batch export completes.
         bpy.ops.object.select_all(action="DESELECT")
@@ -130,6 +184,9 @@ class CROWD_OT_ExportAssets(bpy.types.Operator):
             bpy.ops.wm.path_open(filepath=library_root)
         except Exception:
             self.report({"WARNING"}, "Export finished, but opening Library Root failed.")
+
+        if exported_count == 0 and skipped_count > 0:
+            return {"CANCELLED"}
 
         return {"FINISHED"}
 

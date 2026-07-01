@@ -1,48 +1,90 @@
 # Blender UE5 USD Crowd Pipeline
 
-This repository contains a Blender 5 extension that turns a folder of rigged garment meshes into a USD-based asset library for a crowd diversity pipeline.
+## Project Overview
+This project implements a practical crowd-variation pipeline that starts in Blender and targets Unreal Engine 5. The Blender extension exports rigged character bodies, clothing, hair, shoes, and accessories as USD assets plus JSON metadata sidecars, so downstream tools can assemble large visual variety from reusable parts.
 
-## What is included
+The approach is inspired by Sony Pictures Imageworks KPDH-style previs workflows: a small set of base characters and modular wardrobe pieces produce broad crowd diversity through combinatorics instead of one-off hero builds. Here, that idea is reimplemented with an accessible toolchain (Blender + UE5 + Python) for portfolio and production-adjacent experimentation.
 
-- Blender extension manifest at [blender_manifest.toml](blender_manifest.toml)
-- Add-on package at [crowd_diversity_pipeline](crowd_diversity_pipeline)
-- Batch USD export operator with JSON metadata sidecars
-- Per-object category assignment in the panel so mixed types can be exported in one run
-- Fit-check operator with `Original`, `Neutral`, `A-Pose`, and `T-Pose` options
-- 3D Viewport sidebar panel for library output, selected-asset category assignment, and fit-check actions
-- Export convenience behavior: deselect all after export and open the Library Root folder in Explorer/Finder
+This repository currently delivers the Blender half of the pipeline (authoring, validation, export). The UE5 half (automated import, skeleton reassignment, and crowd assembly) is planned as Phase 2 under `ue5_pipeline/import_garment.py`.
 
-## Installation in Blender
+## Architecture
+The pipeline is intentionally split into two stages: deterministic asset packaging in Blender, then deterministic assembly in UE5.
 
-1. Open Blender 5.x.
-2. Go to Edit > Preferences > Add-ons.
-3. Choose Install from Disk and select the extension package (zip or root extension folder).
-4. Enable the add-on named "Crowd Diversity USD Pipeline".
+```mermaid
+flowchart LR
+		A[Blender Scene\nMaster Armature + Skinned Parts] --> B[Blender Extension\nCategory + Rig ID + Export]
+		B --> C[USD Files\nPer-Asset Geometry + Skinning]
+		B --> D[JSON Sidecars\nCategory Slot compatible_rig Provenance]
+		C --> E[UE5 Python Import (Phase 2)]
+		D --> E
+		E --> F[Shared Skeleton Reassignment\nCrowd Scatter and Assembly]
+```
 
-## Usage
+Operationally, all exportable parts are expected to be skinned to a single master armature before export. This is a pipeline contract, not a hardcoded rig-name restriction. Any rig can be the master as long as every interchangeable asset references the same logical rig ID in metadata.
 
-1. Select one or more rigged mesh objects in Blender.
-2. Choose an output library root in the add-on preferences or panel.
-3. In `Selected Asset Types`, assign a category for each selected object (`Hair`, `Top`, `Bottom`, `Shoes`, `Accessory`).
-4. Optional: run `Fit Check` using `Neutral`, `A-Pose`, or `T-Pose`.
-5. `Fit Check` poses the original rigged assets (it does not create temporary duplicate meshes).
-6. To restore the saved pre-fit-check state, choose `Original` and run `Fit Check`.
-7. Click `Export Selected Assets`.
-8. The add-on exports one USD + one JSON sidecar per selected object, deselects all objects, and opens the Library Root folder.
+That rig contract is tracked through the `compatible_rig` field in each sidecar. Rig IDs are managed at scene level in a `Rig IDs` list, then assigned per object via dropdown in the export panel. This prevents free-text typos while keeping compatibility explicit in metadata.
 
-## Metadata Sidecar
+## Library Structure
+The extension writes one USD and one JSON file per exported asset into category folders:
 
-Each exported asset writes a JSON sidecar containing at least:
+```text
+/library
+	/characters/
+		body_001.usd
+		body_001.json
+	/tops/
+		jacket_001.usd
+		jacket_001.json
+	/hair/
+	/bottoms/
+	/shoes/
+	/accessories/
+```
+
+JSON sidecars include:
 
 - `category`
 - `slot`
 - `exclusivity_tags`
+- `compatible_rig`
 - `source_file`
 - `export_date`
 - `blender_version`
 - `source_asset_name`
 
-## Verification
+## Installation
+Install as a Blender 5 extension:
 
-- Core export and metadata helpers are covered by [tests/test_core.py](tests/test_core.py).
-- Syntax checks can be run with `python -m py_compile` on files in [crowd_diversity_pipeline](crowd_diversity_pipeline).
+1. Open Blender 5.x.
+2. Navigate to Edit -> Preferences -> Add-ons.
+3. Select Install from Disk.
+4. Point Blender at this repository root (or packaged extension zip).
+5. Enable `Crowd Diversity USD Pipeline`.
+
+## Usage
+Authoring and export flow:
+
+1. Skin character bodies and modular garments/hair/accessories to the same master armature in Blender.
+2. Select one or more rigged mesh assets.
+3. In `Rig IDs`, define one or more rig IDs (for example, `mixamo_v1`).
+4. In `Selected Asset Types`, assign each selected object both a category and a compatible rig ID.
+5. Optionally run Fit Check poses (`Original`, `Neutral`, `A-Pose`, `T-Pose`) for clipping review.
+6. Export selected assets to produce USD + JSON sidecars.
+7. Import in UE5 via the pipeline script (`ue5_pipeline/import_garment.py`, Phase 2 workstream).
+
+## Known Limitations
+UE5 USD skeletal mesh import generates a skeleton asset per import by default. The planned UE5 Python layer handles reassignment to a shared skeleton to keep crowd assembly consistent and content-browser noise low.
+
+Blender USD export has practical feature limits for this workflow: bendy bones and non-Armature deformation stacks are not reliably represented for this pipeline target. For predictable interchange, keep export assets on conventional armature-driven skinning.
+
+Objects without a valid rig assignment in the managed rig list are skipped during export and reported as warnings, preventing silent metadata drift.
+
+## Multi-Rig Support (Future Work)
+The current implementation intentionally enforces a single-master-rig workflow because it is the most robust baseline for deterministic crowd swaps, and it mirrors common studio practice for large extras populations.
+
+The metadata schema already includes `compatible_rig` specifically to support a future multi-rig pipeline. In that phase, the UE5 import layer would maintain a `SKELETON_MAP` (rig ID -> UE5 skeleton path), and crowd assembly logic would validate `compatible_rig` compatibility before pairing garments with character bodies.
+
+That extension is straightforward in principle but was deliberately scoped out of the first implementation to keep the initial system reliable, testable, and portfolio-demonstrable.
+
+## Verification
+Core pure-Python export and metadata logic is covered in `tests/test_core.py`, including category path mapping, output path generation, and sidecar serialization behavior.

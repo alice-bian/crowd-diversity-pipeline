@@ -22,7 +22,7 @@ except ImportError:  # pragma: no cover - exercised in plain Python test environ
     bpy = _BpyStub()
 
 CATEGORY_FOLDERS = {
-    "character_body": "character_bodies",
+    "character_body": "characters",
     "hair": "hair",
     "top": "tops",
     "bottom": "bottoms",
@@ -103,11 +103,13 @@ def build_metadata(
     source_file: str | None,
     slot: str | None = None,
     exclusivity_tags: list[str] | None = None,
+    compatible_rig: str = "mixamo_v1",
 ) -> dict[str, Any]:
     metadata = {
         "category": category,
         "slot": slot or get_default_slot(category),
         "exclusivity_tags": exclusivity_tags or [],
+        "compatible_rig": compatible_rig or "mixamo_v1",
         "source_file": source_file or bpy.data.filepath or "",
         "export_date": datetime.utcnow().isoformat() + "Z",
         "blender_version": bpy.app.version_string,

@@ -34,6 +34,7 @@ class TestCore(unittest.TestCase):
                 source_file="/tmp/source.blend",
                 slot="head",
                 exclusivity_tags=["head_covering"],
+                compatible_rig="mixamo_v1",
             )
             sidecar_path = write_metadata_sidecar(export_path, metadata)
 
@@ -42,6 +43,7 @@ class TestCore(unittest.TestCase):
             self.assertEqual(saved["category"], "hair")
             self.assertEqual(saved["slot"], "head")
             self.assertEqual(saved["exclusivity_tags"], ["head_covering"])
+            self.assertEqual(saved["compatible_rig"], "mixamo_v1")
 
 
 if __name__ == "__main__":

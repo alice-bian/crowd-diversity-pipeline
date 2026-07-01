@@ -60,16 +60,31 @@ class CROWD_PT_Panel(bpy.types.Panel):
         box.prop(prefs, "library_root")
 
         box = layout.box()
+        box.label(text="Rig IDs")
+        if not context.scene.crowd_diversity_rigs:
+            box.label(text="No rigs defined yet.", icon="INFO")
+
+        for index, rig in enumerate(context.scene.crowd_diversity_rigs):
+            row = box.row(align=True)
+            row.prop(rig, "name", text="")
+            remove_op = row.operator("crowd_diversity.remove_rig", text="", icon="TRASH")
+            remove_op.index = index
+
+        add_row = box.row(align=True)
+        add_row.operator("crowd_diversity.add_rig", text="Add", icon="ADD")
+
+        box = layout.box()
         box.label(text="Selected Asset Types")
         selected_meshes = [obj for obj in context.selected_objects if obj.type == "MESH"]
 
         if not selected_meshes:
-            box.label(text="Select one or more mesh objects to assign types.")
+            box.label(text="Select one or more mesh objects to assign type and rig.")
         else:
             for obj in selected_meshes:
                 row = box.row(align=True)
                 row.label(text=obj.name)
                 row.prop(obj, "crowd_diversity_category", text="")
+                row.prop(obj, "crowd_diversity_compatible_rig", text="")
 
         layout.separator()
         box = layout.box()
