@@ -10,4 +10,4 @@ license = ["SPDX:GPL-3.0-or-later"]
 
 [permissions]
 # Allow the add-on to create and update the user-selected USD asset library folders.
-files = "**/*"
+files = "Create and update the user-selected USD asset library on disk"

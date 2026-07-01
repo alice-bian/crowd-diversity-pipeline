@@ -25,9 +25,10 @@ This repository contains a Blender 5 extension that turns a folder of rigged gar
 2. Choose an output library root in the add-on preferences or panel.
 3. In `Selected Asset Types`, assign a category for each selected object (`Hair`, `Top`, `Bottom`, `Shoes`, `Accessory`).
 4. Optional: run `Fit Check` using `Neutral`, `A-Pose`, or `T-Pose`.
-5. To restore the saved pre-fit-check state, choose `Original` and run `Fit Check`.
-6. Click `Export Selected Assets`.
-7. The add-on exports one USD + one JSON sidecar per selected object, deselects all objects, and opens the Library Root folder.
+5. `Fit Check` poses the original rigged assets (it does not create temporary duplicate meshes).
+6. To restore the saved pre-fit-check state, choose `Original` and run `Fit Check`.
+7. Click `Export Selected Assets`.
+8. The add-on exports one USD + one JSON sidecar per selected object, deselects all objects, and opens the Library Root folder.
 
 ## Metadata Sidecar
 

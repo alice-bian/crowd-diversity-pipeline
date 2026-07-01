@@ -6,26 +6,7 @@ import os
 import bpy
 from mathutils import Matrix
 
-from .core import build_export_output_path, build_metadata, write_metadata_sidecar
-
-
-def _find_addon_preferences(context: bpy.types.Context):
-    module_package = __package__ or __name__
-    if module_package.endswith(".crowd_diversity_pipeline") and module_package != "crowd_diversity_pipeline":
-        addon_id = module_package[: -len(".crowd_diversity_pipeline")]
-    else:
-        addon_id = "crowd_diversity_pipeline"
-
-    for key in (addon_id, module_package, "crowd_diversity_pipeline"):
-        addon = context.preferences.addons.get(key)
-        if addon is not None and addon.preferences is not None:
-            return addon.preferences
-
-    for key, addon in context.preferences.addons.items():
-        if "crowd_diversity" in key and addon.preferences is not None:
-            return addon.preferences
-
-    return None
+from .core import build_export_output_path, build_metadata, find_addon_preferences, write_metadata_sidecar
 
 
 class CROWD_OT_ExportAssets(bpy.types.Operator):
@@ -34,7 +15,7 @@ class CROWD_OT_ExportAssets(bpy.types.Operator):
     bl_description = "Export the selected rigged garment meshes as USD files and write metadata sidecars"
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        prefs = _find_addon_preferences(context)
+        prefs = find_addon_preferences(context, __package__ or __name__)
         if prefs is None:
             self.report({"ERROR"}, "Add-on preferences are unavailable. Re-enable the extension.")
             return {"CANCELLED"}
@@ -118,7 +99,7 @@ class CROWD_OT_RunFitCheck(bpy.types.Operator):
         for armature in armatures:
             if pose_name != "original":
                 self._capture_original_pose(armature)
-            self._apply_pose(armature, pose_name)
+            self._apply_pose(context, armature, pose_name)
 
         self.report({"INFO"}, f"Applied {pose_name} to {len(armatures)} armature(s).")
 
@@ -131,10 +112,6 @@ class CROWD_OT_RunFitCheck(bpy.types.Operator):
         for modifier in obj.modifiers:
             if modifier.type == "ARMATURE" and modifier.object is not None:
                 return modifier.object
-
-        for scene_obj in context.scene.objects:
-            if scene_obj.type == "ARMATURE":
-                return scene_obj
 
         return None
 
@@ -171,10 +148,10 @@ class CROWD_OT_RunFitCheck(bpy.types.Operator):
 
         return True
 
-    def _apply_pose(self, armature: bpy.types.Object, pose_name: str) -> None:
+    def _apply_pose(self, context: bpy.types.Context, armature: bpy.types.Object, pose_name: str) -> None:
         bpy.ops.object.select_all(action="DESELECT")
         armature.select_set(True)
-        bpy.context.view_layer.objects.active = armature
+        context.view_layer.objects.active = armature
         bpy.ops.object.mode_set(mode="POSE")
 
         if pose_name == "original":

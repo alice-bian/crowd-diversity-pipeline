@@ -5,18 +5,14 @@ try:
 except ImportError:  # pragma: no cover - exercised in plain Python test environments
     bpy = None
 
-from .core import CATEGORY_LABELS
+from .core import CATEGORY_LABELS, get_addon_id
 
 if bpy is not None:
     from .operators import CROWD_OT_ExportAssets, CROWD_OT_RunFitCheck
     from .ui import CROWD_PT_Panel, CROWD_Preferences
 
 
-_MODULE_PACKAGE = __package__ or __name__
-if _MODULE_PACKAGE.endswith(".crowd_diversity_pipeline") and _MODULE_PACKAGE != "crowd_diversity_pipeline":
-    ADDON_ID = _MODULE_PACKAGE[: -len(".crowd_diversity_pipeline")]
-else:
-    ADDON_ID = "crowd_diversity_pipeline"
+ADDON_ID = get_addon_id(__package__ or __name__)
 
 
 def _get_addon_name() -> str:

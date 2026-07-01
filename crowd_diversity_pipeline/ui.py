@@ -4,11 +4,9 @@ import os
 
 import bpy
 
-_MODULE_PACKAGE = __package__ or __name__
-if _MODULE_PACKAGE.endswith(".crowd_diversity_pipeline") and _MODULE_PACKAGE != "crowd_diversity_pipeline":
-    ADDON_ID = _MODULE_PACKAGE[: -len(".crowd_diversity_pipeline")]
-else:
-    ADDON_ID = "crowd_diversity_pipeline"
+from .core import find_addon_preferences, get_addon_id
+
+ADDON_ID = get_addon_id(__package__ or __name__)
 
 
 def _normalize_windows_dir_path(path_value: str) -> str:
@@ -42,19 +40,6 @@ class CROWD_Preferences(bpy.types.AddonPreferences):
         layout.prop(self, "library_root")
 
 
-def _find_addon_preferences(context: bpy.types.Context):
-    for key in (ADDON_ID, __package__ or __name__, "crowd_diversity_pipeline"):
-        addon = context.preferences.addons.get(key)
-        if addon is not None and addon.preferences is not None:
-            return addon.preferences
-
-    for name, addon in context.preferences.addons.items():
-        if "crowd_diversity" in name and addon.preferences is not None:
-            return addon.preferences
-
-    return None
-
-
 class CROWD_PT_Panel(bpy.types.Panel):
     bl_label = "Crowd Diversity"
     bl_idname = "CROWD_PT_panel"
@@ -64,7 +49,7 @@ class CROWD_PT_Panel(bpy.types.Panel):
 
     def draw(self, context: bpy.types.Context) -> None:
         layout = self.layout
-        prefs = _find_addon_preferences(context)
+        prefs = find_addon_preferences(context, __package__ or __name__)
 
         if prefs is None:
             layout.label(text="Crowd Diversity add-on not fully loaded.", icon="ERROR")

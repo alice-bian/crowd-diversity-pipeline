@@ -46,6 +46,34 @@ DEFAULT_SLOTS = {
 }
 
 
+def get_addon_id(module_package: str | None) -> str:
+    package_name = module_package or ""
+    if package_name.endswith(".crowd_diversity_pipeline") and package_name != "crowd_diversity_pipeline":
+        return package_name[: -len(".crowd_diversity_pipeline")]
+    return "crowd_diversity_pipeline"
+
+
+ADDON_ID = get_addon_id(__package__ or __name__)
+
+
+def find_addon_preferences(context, module_package: str | None = None):
+    addon_id = get_addon_id(module_package)
+    package_name = module_package or ""
+
+    for key in (addon_id, package_name, "crowd_diversity_pipeline"):
+        if not key:
+            continue
+        addon = context.preferences.addons.get(key)
+        if addon is not None and addon.preferences is not None:
+            return addon.preferences
+
+    for key, addon in context.preferences.addons.items():
+        if "crowd_diversity" in key and addon.preferences is not None:
+            return addon.preferences
+
+    return None
+
+
 def sanitize_name(name: str) -> str:
     cleaned = re.sub(r"[^0-9A-Za-z._-]+", "_", name).strip("._-")
     return cleaned or "asset"
