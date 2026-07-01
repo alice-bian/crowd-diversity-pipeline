@@ -9,6 +9,17 @@ from mathutils import Matrix
 from .core import build_export_output_path, build_metadata, find_addon_preferences, write_metadata_sidecar
 
 
+def _find_bound_armature(obj: bpy.types.Object) -> bpy.types.Object | None:
+    if obj.parent is not None and obj.parent.type == "ARMATURE":
+        return obj.parent
+
+    for modifier in obj.modifiers:
+        if modifier.type == "ARMATURE" and modifier.object is not None:
+            return modifier.object
+
+    return None
+
+
 class CROWD_OT_ExportAssets(bpy.types.Operator):
     bl_idname = "crowd_diversity.export_assets"
     bl_label = "Export Selected Assets"
@@ -38,10 +49,18 @@ class CROWD_OT_ExportAssets(bpy.types.Operator):
             export_dir = os.path.dirname(export_path)
             os.makedirs(export_dir, exist_ok=True)
 
+            armature = _find_bound_armature(obj)
+
             bpy.ops.object.select_all(action="DESELECT")
             obj.select_set(True)
+            if armature is not None:
+                armature.select_set(True)
             context.view_layer.objects.active = obj
-            bpy.ops.wm.usd_export(filepath=export_path, check_existing=False)
+            bpy.ops.wm.usd_export(
+                filepath=export_path,
+                check_existing=False,
+                selected_objects_only=True,
+            )
 
             metadata = build_metadata(
                 category=category,
