@@ -20,6 +20,47 @@ def _find_bound_armature(obj: bpy.types.Object) -> bpy.types.Object | None:
     return None
 
 
+def _prepare_export_duplicates(
+    context: bpy.types.Context,
+    mesh_obj: bpy.types.Object,
+    armature_obj: bpy.types.Object | None,
+) -> tuple[bpy.types.Object, bpy.types.Object | None, list[bpy.types.Object]]:
+    temp_objects: list[bpy.types.Object] = []
+
+    mesh_copy = mesh_obj.copy()
+    mesh_copy.data = mesh_obj.data.copy()
+    context.scene.collection.objects.link(mesh_copy)
+    temp_objects.append(mesh_copy)
+
+    armature_copy: bpy.types.Object | None = None
+    if armature_obj is not None:
+        armature_copy = armature_obj.copy()
+        armature_copy.data = armature_obj.data.copy()
+        context.scene.collection.objects.link(armature_copy)
+        temp_objects.append(armature_copy)
+
+        if mesh_obj.parent == armature_obj:
+            matrix_world = mesh_copy.matrix_world.copy()
+            mesh_copy.parent = armature_copy
+            mesh_copy.parent_type = "OBJECT"
+            mesh_copy.parent_bone = ""
+            mesh_copy.matrix_world = matrix_world
+
+        for modifier in mesh_copy.modifiers:
+            if modifier.type == "ARMATURE":
+                modifier.object = armature_copy
+
+    bpy.ops.object.select_all(action="DESELECT")
+    mesh_copy.select_set(True)
+    if armature_copy is not None:
+        armature_copy.select_set(True)
+
+    context.view_layer.objects.active = mesh_copy
+    bpy.ops.object.transform_apply(location=False, rotation=True, scale=True)
+
+    return mesh_copy, armature_copy, temp_objects
+
+
 class CROWD_OT_ExportAssets(bpy.types.Operator):
     bl_idname = "crowd_diversity.export_assets"
     bl_label = "Export Selected Assets"
@@ -50,17 +91,27 @@ class CROWD_OT_ExportAssets(bpy.types.Operator):
             os.makedirs(export_dir, exist_ok=True)
 
             armature = _find_bound_armature(obj)
+            mesh_export_obj = None
+            armature_export_obj = None
+            temp_objects: list[bpy.types.Object] = []
 
-            bpy.ops.object.select_all(action="DESELECT")
-            obj.select_set(True)
-            if armature is not None:
-                armature.select_set(True)
-            context.view_layer.objects.active = obj
-            bpy.ops.wm.usd_export(
-                filepath=export_path,
-                check_existing=False,
-                selected_objects_only=True,
-            )
+            try:
+                mesh_export_obj, armature_export_obj, temp_objects = _prepare_export_duplicates(context, obj, armature)
+
+                bpy.ops.object.select_all(action="DESELECT")
+                mesh_export_obj.select_set(True)
+                if armature_export_obj is not None:
+                    armature_export_obj.select_set(True)
+                context.view_layer.objects.active = mesh_export_obj
+                bpy.ops.wm.usd_export(
+                    filepath=export_path,
+                    check_existing=False,
+                    selected_objects_only=True,
+                )
+            finally:
+                for temp_obj in temp_objects:
+                    if temp_obj.name in bpy.data.objects:
+                        bpy.data.objects.remove(temp_obj, do_unlink=True)
 
             metadata = build_metadata(
                 category=category,
