@@ -5,7 +5,7 @@ This project implements a practical crowd-variation pipeline that starts in Blen
 
 The approach is inspired by Sony Pictures Imageworks KPDH-style previs workflows: a small set of base characters and modular wardrobe pieces produce broad crowd diversity through combinatorics instead of one-off hero builds. Here, that idea is reimplemented with an accessible toolchain (Blender + UE5 + Python) for portfolio and production-adjacent experimentation.
 
-This repository currently delivers the Blender half of the pipeline (authoring, validation, export). The UE5 half (automated import, skeleton reassignment, and crowd assembly) is planned as Phase 2 under `ue5_pipeline/import_garment.py`.
+This repository now includes both halves of the baseline pipeline: Blender authoring/export and a UE5 editor Python importer at `ue5_pipeline/import_garment.py`.
 
 ## Architecture
 The pipeline is intentionally split into two stages: deterministic asset packaging in Blender, then deterministic assembly in UE5.
@@ -15,7 +15,7 @@ flowchart LR
 		A[Blender Scene\nMaster Armature + Skinned Parts] --> B[Blender Extension\nCategory + Rig ID + Export]
 		B --> C[USD Files\nPer-Asset Geometry + Skinning]
 		B --> D[JSON Sidecars\nCategory Slot compatible_rig Provenance]
-		C --> E[UE5 Python Import (Phase 2)]
+		C --> E[UE5 Python Import]
 		D --> E
 		E --> F[Shared Skeleton Reassignment\nCrowd Scatter and Assembly]
 ```
@@ -70,10 +70,12 @@ Authoring and export flow:
 4. In `Selected Asset Types`, assign each selected object both a category and a compatible rig ID.
 5. Optionally run Fit Check poses (`Original`, `Neutral`, `A-Pose`, `T-Pose`) for clipping review.
 6. Export selected assets to produce USD + JSON sidecars.
-7. Import in UE5 via the pipeline script (`ue5_pipeline/import_garment.py`, Phase 2 workstream).
+7. Import in UE5 via `ue5_pipeline/import_garment.py`.
 
 ## Known Limitations
-UE5 USD skeletal mesh import generates a skeleton asset per import by default. The planned UE5 Python layer handles reassignment to a shared skeleton to keep crowd assembly consistent and content-browser noise low.
+UE5 USD skeletal mesh import generates a skeleton asset per import by default. The included UE5 Python importer handles redirector cleanup, idempotent re-runs, and canonical skeleton validation.
+
+On UE5.5, skeleton reassignment APIs can be unstable in some builds/projects. The importer keeps reassignment disabled by default for crash safety (`ENABLE_SKELETON_REASSIGN = False`) and logs duplicate skeleton state for controlled follow-up.
 
 Blender USD export has practical feature limits for this workflow: bendy bones and non-Armature deformation stacks are not reliably represented for this pipeline target. For predictable interchange, keep export assets on conventional armature-driven skinning.
 
