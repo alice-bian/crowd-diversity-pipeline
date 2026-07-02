@@ -1,38 +1,60 @@
 from __future__ import annotations
 
 import json
+import os
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
 import unreal
 
-# Path to the USD file to import. Update before running the script.
-USD_FILE_PATH = "C:/Users/alice/crowd_diversity_library/tops/Jacket.usd"
+# Root folder produced by the Blender exporter.
+#
+# This mirrors the Blender extension's default Library Root setting
+# (`~/crowd_diversity_library`). If your Blender add-on is configured to export
+# somewhere else, either edit this value or set the environment variable
+# `CROWD_DIVERSITY_LIBRARY_ROOT` before launching UE.
+_DEFAULT_LIBRARY_ROOT = "~/crowd_diversity_library"
+_LIBRARY_ROOT_ENV_VAR = "CROWD_DIVERSITY_LIBRARY_ROOT"
+_LIBRARY_ROOT_ENV_VALUE = os.environ.get(_LIBRARY_ROOT_ENV_VAR)
+LIBRARY_ROOT = os.path.normpath(
+    os.path.expanduser(_LIBRARY_ROOT_ENV_VALUE or _DEFAULT_LIBRARY_ROOT)
+)
 
-# Maps Rig ID values (set per-asset in the Blender add-on's Rig IDs panel)
-# to canonical UE5 Skeleton asset paths. Add one entry per master rig family.
-# Extend this map to enable multi-rig support in a future pipeline iteration.
-SKELETON_MAP = {
-    "mixamo_v1": "/Game/Body/SkeletalMeshes/SKEL_BaseCharacter_Rig_004.SKEL_BaseCharacter_Rig_004",
-}
+# Root path in the UE Content Browser where imported assets are placed.
+# Category folders (`characters`, `tops`, `hair`, etc.) are created below this.
+CONTENT_ROOT = "/Game"
 
-# Destination root in the Content Browser.
-CONTENT_ROOT = "/Game/CrowdDiversity"
+# Optional canonical skeleton overrides by rig ID.
+#
+# Leave this empty for the generic flow: character body imports are processed
+# first, and their imported skeletons become the canonical skeletons for those
+# rig IDs automatically. Populate this only when you want to force a specific
+# existing UE skeleton path for a rig ID.
+SKELETON_MAP: dict[str, str] = {}
 
-# Keep reassignment disabled by default while stabilizing UE5.5 behavior.
-# Set to True only after confirming your build does not crash during reassignment.
-ENABLE_SKELETON_REASSIGN = False
+# When True, non-body assets are reassigned onto the canonical skeleton for
+# their rig ID after import.
+ENABLE_SKELETON_REASSIGN = True
 
-# Consolidation can be unstable in some UE5.5 builds/projects when called from
-# Python on recently imported assets. Keep it opt-in and prefer subsystem APIs.
-ENABLE_CONSOLIDATE_FALLBACK = False
+# When True, any garment/hair/accessory that does not end up on the canonical
+# skeleton is treated as a hard failure instead of a warning.
+REQUIRE_CANONICAL_SKELETON = True
 
-# Crash tracing: this file is written step-by-step so you can inspect progress
-# even if the Unreal Editor process terminates unexpectedly.
+# Consolidation is the fallback when UE5 Python does not expose a working direct
+# skeleton reassignment API. This is useful in UE5.5, but it is more invasive
+# than subsystem-based reassignment.
+ENABLE_CONSOLIDATE_FALLBACK = True
+
+# When True, the script performs best-effort cleanup after orphan skeleton
+# deletion: fix up redirectors, save dirty packages, collect garbage, and ask
+# the asset registry to rescan the affected folder.
+RUN_POST_CLEANUP_MAINTENANCE = True
+
+# Crash/debug trace written outside the project so it survives editor crashes.
 TRACE_LOG_PATH = "C:/Users/Public/crowd_import_trace.log"
 
-# Keep category-to-folder naming aligned with Blender exporter output.
 CATEGORY_TO_FOLDER = {
     "character_body": "characters",
     "hair": "hair",
@@ -41,6 +63,18 @@ CATEGORY_TO_FOLDER = {
     "shoes": "shoes",
     "accessory": "accessories",
 }
+
+
+@dataclass(frozen=True)
+class AssetRecord:
+    usd_path: Path
+    metadata: dict[str, Any]
+    category: str
+    source_asset_name: str
+    compatible_rig: str
+    usd_stem: str
+    target_path: str
+    expected_import_root: str
 
 
 def _log_info(message: str) -> None:
@@ -65,7 +99,6 @@ def _append_trace(level: str, message: str) -> None:
         with Path(TRACE_LOG_PATH).open("a", encoding="utf-8") as handle:
             handle.write(line)
     except Exception:
-        # Never fail the import because trace logging path is unavailable.
         pass
 
 
@@ -106,8 +139,11 @@ def _category_folder(category: str) -> str:
 
 
 def _build_target_path(content_root: str, category: str) -> str:
-    folder = _category_folder(category)
-    return f"{content_root.rstrip('/')}/{folder}"
+    return f"{content_root.rstrip('/')}/{_category_folder(category)}"
+
+
+def _build_expected_import_root(target_path: str, usd_stem: str) -> str:
+    return f"{target_path}/{usd_stem}"
 
 
 def _ensure_content_folder(content_path: str) -> None:
@@ -135,7 +171,6 @@ def _is_redirector_asset(asset_path: str) -> bool:
             class_tokens.append(str(class_path.asset_name))
         class_tokens.append(str(class_path))
 
-    # Fallback for builds where AssetData class path metadata is incomplete.
     loaded_asset = unreal.EditorAssetLibrary.load_asset(asset_path)
     if loaded_asset is not None:
         try:
@@ -143,23 +178,106 @@ def _is_redirector_asset(asset_path: str) -> bool:
         except Exception:
             pass
 
-    class_blob = " ".join(class_tokens).lower()
-    return "redirector" in class_blob
+    return "redirector" in " ".join(class_tokens).lower()
 
 
 def _cleanup_redirectors(content_path: str) -> int:
     cleaned = 0
-    asset_paths = unreal.EditorAssetLibrary.list_assets(content_path, recursive=True, include_folder=False)
-    for asset_path in asset_paths:
-        if not _is_redirector_asset(asset_path):
-            continue
-
-        if unreal.EditorAssetLibrary.delete_asset(asset_path):
+    for asset_path in unreal.EditorAssetLibrary.list_assets(content_path, recursive=True, include_folder=False):
+        if _is_redirector_asset(asset_path) and unreal.EditorAssetLibrary.delete_asset(asset_path):
             cleaned += 1
 
     if cleaned > 0:
         _log_warning(f"Deleted {cleaned} stale redirector asset(s) under {content_path}.")
     return cleaned
+
+
+def _loaded_redirectors_in_path(content_path: str) -> list[object]:
+    redirectors: list[object] = []
+    for asset_path in unreal.EditorAssetLibrary.list_assets(content_path, recursive=True, include_folder=False):
+        if not _is_redirector_asset(asset_path):
+            continue
+        loaded = unreal.EditorAssetLibrary.load_asset(asset_path)
+        if loaded is not None:
+            redirectors.append(loaded)
+    return redirectors
+
+
+def _fixup_redirectors(content_path: str) -> None:
+    redirectors = _loaded_redirectors_in_path(content_path)
+    if not redirectors:
+        return
+
+    asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
+    if not hasattr(asset_tools, "fixup_referencers"):
+        _log_warning("AssetTools.fixup_referencers is unavailable in this UE build.")
+        return
+
+    try:
+        asset_tools.fixup_referencers(redirectors, False)
+        _log_info(f"Fixup redirectors completed under {content_path}.")
+        return
+    except TypeError:
+        pass
+    except Exception as exc:
+        _log_warning(f"Fixup redirectors failed under {content_path}: {exc}")
+        return
+
+    try:
+        delete_mode = getattr(unreal, "ERedirectFixupMode", None)
+        if delete_mode is not None and hasattr(delete_mode, "DELETE_FIXED_UP_REDIRECTORS"):
+            asset_tools.fixup_referencers(redirectors, False, delete_mode.DELETE_FIXED_UP_REDIRECTORS)
+            _log_info(f"Fixup redirectors completed under {content_path}.")
+    except Exception as exc:
+        _log_warning(f"Fixup redirectors failed under {content_path}: {exc}")
+
+
+def _save_dirty_packages() -> None:
+    saver = getattr(unreal, "EditorLoadingAndSavingUtils", None)
+    if saver is None:
+        return
+
+    try:
+        saver.save_dirty_packages(True, True)
+        _log_info("Saved dirty map/content packages.")
+        return
+    except TypeError:
+        pass
+    except Exception as exc:
+        _log_warning(f"Save dirty packages failed: {exc}")
+        return
+
+    try:
+        saver.save_dirty_packages()
+        _log_info("Saved dirty packages.")
+    except Exception as exc:
+        _log_warning(f"Save dirty packages failed: {exc}")
+
+
+def _refresh_asset_registry(content_path: str) -> None:
+    helpers = getattr(unreal, "AssetRegistryHelpers", None)
+    if helpers is None:
+        return
+
+    try:
+        registry = helpers.get_asset_registry()
+        registry.scan_paths_synchronous([content_path], True, False)
+        _log_info(f"Asset registry refreshed for {content_path}.")
+    except Exception as exc:
+        _log_warning(f"Asset registry refresh failed for {content_path}: {exc}")
+
+
+def _post_cleanup_maintenance(content_path: str) -> None:
+    if not RUN_POST_CLEANUP_MAINTENANCE:
+        return
+    _fixup_redirectors(content_path)
+    _save_dirty_packages()
+    try:
+        unreal.SystemLibrary.collect_garbage()
+        _log_info("Requested garbage collection.")
+    except Exception as exc:
+        _log_warning(f"Garbage collection request failed: {exc}")
+    _refresh_asset_registry(content_path)
 
 
 def _has_redirectors(content_path: str) -> bool:
@@ -168,25 +286,45 @@ def _has_redirectors(content_path: str) -> bool:
 
 
 def _find_first_skeletal_mesh(content_path: str):
-    asset_paths = unreal.EditorAssetLibrary.list_assets(content_path, recursive=True, include_folder=False)
-    for asset_path in asset_paths:
+    for asset_path in unreal.EditorAssetLibrary.list_assets(content_path, recursive=True, include_folder=False):
         asset = unreal.EditorAssetLibrary.load_asset(asset_path)
         if asset and isinstance(asset, unreal.SkeletalMesh):
             return asset
     return None
 
 
-def _load_canonical_skeleton(compatible_rig: str):
-    skeleton_path = SKELETON_MAP.get(compatible_rig)
+def _safe_delete_if_unreferenced(asset_path: str) -> bool:
+    if not asset_path:
+        return True
+    if not unreal.EditorAssetLibrary.does_asset_exist(asset_path):
+        _log_info(f"Cleanup skip (already missing): {asset_path}")
+        return True
+
+    referencers = unreal.EditorAssetLibrary.find_package_referencers_for_asset(asset_path, load_assets_to_confirm=False)
+    referencers = [ref for ref in referencers if ref]
+    if referencers:
+        _log_warning("Cleanup skip (asset still referenced): {} <- {}".format(asset_path, ", ".join(referencers)))
+        return False
+
+    deleted = unreal.EditorAssetLibrary.delete_asset(asset_path)
+    if deleted:
+        _log_info(f"Deleted unreferenced asset: {asset_path}")
+        _post_cleanup_maintenance(asset_path.rsplit("/", 1)[0])
+        return True
+
+    _log_warning(f"Delete failed for unreferenced asset: {asset_path}")
+    return False
+
+
+def _load_canonical_skeleton(compatible_rig: str, skeleton_map: dict[str, str]):
+    skeleton_path = skeleton_map.get(compatible_rig)
     if not skeleton_path:
         _fail(
-            "No skeleton mapping for rig ID '{}'. Add an entry to SKELETON_MAP at the top "
-            "of this script, for example: SKELETON_MAP['{}'] = '/Game/YourSkeleton'.".format(
-                compatible_rig, compatible_rig
+            "No canonical skeleton is registered for rig ID '{}'. Import a character body for this rig first, or add an override to SKELETON_MAP.".format(
+                compatible_rig
             )
         )
         return None, None
-
     if not unreal.EditorAssetLibrary.does_asset_exist(skeleton_path):
         _fail(f"Canonical skeleton asset not found at configured path: {skeleton_path}")
         return None, None
@@ -195,62 +333,32 @@ def _load_canonical_skeleton(compatible_rig: str):
     if skeleton is None:
         _fail(f"Failed to load canonical skeleton asset: {skeleton_path}")
         return None, None
-
     return skeleton_path, skeleton
 
 
-def _find_existing_skeletal_mesh(target_path: str, preferred_names: list[str]):
-    preferred_lower = {name.lower() for name in preferred_names if name}
-    assets_in_folder = unreal.EditorAssetLibrary.list_assets(target_path, recursive=True, include_folder=False)
-    for asset_path in assets_in_folder:
-        asset = unreal.EditorAssetLibrary.load_asset(asset_path)
-        if not asset or not isinstance(asset, unreal.SkeletalMesh):
-            continue
-
-        if asset.get_name().lower() in preferred_lower:
-            return asset
-
-    return None
-
-
 def _import_usd_asset(usd_path: str, destination_path: str) -> list[str]:
-    # UE Python USD import APIs vary by engine/plugin setup.
-    # AssetImportTask is the most stable editor automation path and works when
-    # the USD importer registers a factory for .usd in this project.
     task = unreal.AssetImportTask()
     task.set_editor_property("filename", usd_path)
     task.set_editor_property("destination_path", destination_path)
     task.set_editor_property("automated", True)
     task.set_editor_property("replace_existing", False)
     task.set_editor_property("save", True)
-
     unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
-
     imported_paths = task.get_editor_property("imported_object_paths") or []
     return list(imported_paths)
 
 
-def _find_imported_skeletal_mesh(imported_paths: list[str], target_path: str):
+def _find_imported_skeletal_mesh(imported_paths: list[str], search_root: str):
     for asset_path in imported_paths:
         asset = unreal.EditorAssetLibrary.load_asset(asset_path)
         if asset and isinstance(asset, unreal.SkeletalMesh):
             return asset
-
-    # Fallback when import does not report object paths reliably.
-    assets_in_folder = unreal.EditorAssetLibrary.list_assets(target_path, recursive=True, include_folder=False)
-    for asset_path in assets_in_folder:
-        asset = unreal.EditorAssetLibrary.load_asset(asset_path)
-        if asset and isinstance(asset, unreal.SkeletalMesh):
-            return asset
-
-    return None
+    return _find_first_skeletal_mesh(search_root)
 
 
 def _mesh_uses_skeleton(mesh: unreal.SkeletalMesh, skeleton) -> bool:
     current = mesh.get_editor_property("skeleton")
-    if current is None:
-        return False
-    return current.get_path_name() == skeleton.get_path_name()
+    return current is not None and current.get_path_name() == skeleton.get_path_name()
 
 
 def _try_subsystem_skeleton_assignment(mesh: unreal.SkeletalMesh, canonical_skeleton) -> bool:
@@ -259,37 +367,60 @@ def _try_subsystem_skeleton_assignment(mesh: unreal.SkeletalMesh, canonical_skel
         _log_warning("SkeletalMeshEditorSubsystem is unavailable in this UE session.")
         return False
 
-    candidate_methods = [
-        "assign_skeleton",
-        "set_skeletal_mesh_skeleton",
-        "set_skeleton",
-    ]
+    available_methods = [name for name in dir(subsystem) if "skeleton" in name.lower()]
+    if available_methods:
+        _log_info("SkeletalMeshEditorSubsystem skeleton-related methods: " + ", ".join(sorted(available_methods)))
+    else:
+        _log_warning("SkeletalMeshEditorSubsystem exposes no skeleton-related Python methods in this build.")
+
+    candidate_methods = ["assign_skeleton", "set_skeletal_mesh_skeleton", "set_skeleton"]
+
+    def _check_success() -> bool:
+        reloaded_mesh = unreal.EditorAssetLibrary.load_asset(mesh.get_path_name())
+        if reloaded_mesh is None:
+            return False
+        if not _mesh_uses_skeleton(reloaded_mesh, canonical_skeleton):
+            return False
+        unreal.EditorAssetLibrary.save_loaded_asset(reloaded_mesh)
+        return True
+
+    def _try_call(method, method_name: str, call_label: str, *args, **kwargs) -> bool:
+        try:
+            method(*args, **kwargs)
+        except Exception as exc:
+            _log_warning(f"{method_name} {call_label} failed: {exc}")
+            return False
+        if _check_success():
+            _log_info(f"Skeleton reassigned via SkeletalMeshEditorSubsystem.{method_name} ({call_label}).")
+            return True
+        return False
 
     for method_name in candidate_methods:
         if not hasattr(subsystem, method_name):
             continue
-
         method = getattr(subsystem, method_name)
-        try:
-            method(mesh, canonical_skeleton)
-        except Exception as exc:
-            _log_warning(f"{method_name} failed: {exc}")
-            continue
-
-        reloaded_mesh = unreal.EditorAssetLibrary.load_asset(mesh.get_path_name())
-        if reloaded_mesh is not None and _mesh_uses_skeleton(reloaded_mesh, canonical_skeleton):
-            unreal.EditorAssetLibrary.save_loaded_asset(reloaded_mesh)
-            _log_info(f"Skeleton reassigned via SkeletalMeshEditorSubsystem.{method_name}.")
+        if _try_call(method, method_name, "mesh,skeleton", mesh, canonical_skeleton):
             return True
-
+        if _try_call(method, method_name, "skeleton,mesh", canonical_skeleton, mesh):
+            return True
+        if _try_call(method, method_name, "[mesh],skeleton", [mesh], canonical_skeleton):
+            return True
+        if _try_call(method, method_name, "skeleton,[mesh]", canonical_skeleton, [mesh]):
+            return True
+        if _try_call(method, method_name, "kw(skeletal_mesh,skeleton)", skeletal_mesh=mesh, skeleton=canonical_skeleton):
+            return True
+        if _try_call(method, method_name, "kw(mesh,skeleton)", mesh=mesh, skeleton=canonical_skeleton):
+            return True
+        if _try_call(method, method_name, "kw(skeletal_meshes,skeleton)", skeletal_meshes=[mesh], skeleton=canonical_skeleton):
+            return True
+        if _try_call(method, method_name, "kw(meshes,skeleton)", meshes=[mesh], skeleton=canonical_skeleton):
+            return True
+        if _try_call(method, method_name, "kw(skeletal_mesh,new_skeleton)", skeletal_mesh=mesh, new_skeleton=canonical_skeleton):
+            return True
     return False
 
 
-def _assign_canonical_skeleton(
-    mesh: unreal.SkeletalMesh,
-    canonical_skeleton,
-    target_path: str,
-) -> tuple[bool, Optional[str], str]:
+def _assign_canonical_skeleton(mesh: unreal.SkeletalMesh, canonical_skeleton, target_path: str) -> tuple[bool, Optional[str], str]:
     current_skeleton = mesh.get_editor_property("skeleton")
     if current_skeleton is None:
         _fail(f"Imported skeletal mesh has no skeleton reference: {mesh.get_path_name()}")
@@ -303,133 +434,140 @@ def _assign_canonical_skeleton(
         return True, None, "already"
 
     if not ENABLE_SKELETON_REASSIGN:
-        _log_warning(
-            "Skeleton reassignment is disabled (ENABLE_SKELETON_REASSIGN=False). "
-            "Skipping reassignment to avoid UE crash-prone APIs in this build."
-        )
+        if REQUIRE_CANONICAL_SKELETON:
+            _fail("Skeleton mismatch detected but reassignment is disabled. Current='{}', Canonical='{}'".format(current_path, canonical_path))
+            return False, current_path, "blocked"
+        _log_warning("Skeleton reassignment is disabled (ENABLE_SKELETON_REASSIGN=False).")
         return True, current_path, "skipped"
 
-    # UE5.5 marks SkeletalMesh.skeleton as read-only in Python, so direct
-    # set_editor_property is not valid for reassignment.
     if _try_subsystem_skeleton_assignment(mesh, canonical_skeleton):
         return True, current_path, "subsystem"
 
     if not ENABLE_CONSOLIDATE_FALLBACK:
         _fail(
-            "Could not reassign skeleton with available SkeletalMeshEditorSubsystem APIs. "
-            "Set ENABLE_CONSOLIDATE_FALLBACK=True to try EditorAssetLibrary.consolidate_assets "
-            "as a fallback in your project."
+            "Could not reassign skeleton with available SkeletalMeshEditorSubsystem APIs. Set ENABLE_CONSOLIDATE_FALLBACK=True to try EditorAssetLibrary.consolidate_assets as a fallback."
         )
         return False, current_path, "none"
 
     if not current_path.startswith(target_path + "/"):
-        _fail(
-            "Refusing consolidate fallback because duplicate skeleton is outside target folder: "
-            f"{current_path}"
-        )
+        _fail(f"Refusing consolidate fallback because duplicate skeleton is outside target folder: {current_path}")
+        return False, current_path, "none"
+    if current_path.startswith("/Engine/Transient"):
+        _fail(f"Refusing consolidate fallback because duplicate skeleton is transient: {current_path}. Save/import assets first, then rerun.")
+        return False, current_path, "none"
+    if _is_redirector_asset(current_path):
+        _fail(f"Refusing consolidate fallback because duplicate skeleton path currently resolves to a redirector: {current_path}. Fix/delete redirector first and rerun.")
         return False, current_path, "none"
 
     try:
         consolidated = unreal.EditorAssetLibrary.consolidate_assets(canonical_skeleton, [current_skeleton])
     except Exception as exc:
-        _fail(
-            "Consolidate fallback failed from '{}' to '{}': {}".format(
-                current_path, canonical_path, exc
-            )
-        )
+        _fail("Consolidate fallback failed from '{}' to '{}': {}".format(current_path, canonical_path, exc))
         return False, current_path, "none"
 
     if not consolidated:
-        _fail(
-            "Consolidate fallback returned false from '{}' to '{}'.".format(
-                current_path, canonical_path
-            )
-        )
+        _fail("Consolidate fallback returned false from '{}' to '{}'".format(current_path, canonical_path))
         return False, current_path, "none"
 
     _log_warning("Skeleton reassignment used consolidate fallback. Verify editor stability in your UE build.")
     return True, current_path, "consolidate"
 
 
-def run_import(usd_file_path: str) -> bool:
-    _append_trace("INFO", "--- Crowd import run started ---")
-    _append_trace("INFO", f"Config USD_FILE_PATH={usd_file_path}")
-    _append_trace("INFO", f"Config CONTENT_ROOT={CONTENT_ROOT}")
-    _append_trace("INFO", f"Config ENABLE_SKELETON_REASSIGN={ENABLE_SKELETON_REASSIGN}")
-    _append_trace("INFO", f"Config ENABLE_CONSOLIDATE_FALLBACK={ENABLE_CONSOLIDATE_FALLBACK}")
+def _discover_assets(library_root: Path) -> list[AssetRecord]:
+    discovered: list[AssetRecord] = []
+    for usd_path in sorted(library_root.rglob("*.usd")):
+        metadata = _read_sidecar(usd_path)
+        if metadata is None:
+            continue
+        category = _get_required_string(metadata, "category")
+        source_asset_name = _get_required_string(metadata, "source_asset_name")
+        compatible_rig = _get_required_string(metadata, "compatible_rig")
+        if category is None or source_asset_name is None or compatible_rig is None:
+            continue
 
-    usd_path = Path(usd_file_path)
-    if not usd_path.exists():
-        return _fail(f"USD file not found: {usd_path}")
+        target_path = _build_target_path(CONTENT_ROOT, category)
+        discovered.append(
+            AssetRecord(
+                usd_path=usd_path,
+                metadata=metadata,
+                category=category,
+                source_asset_name=source_asset_name,
+                compatible_rig=compatible_rig,
+                usd_stem=usd_path.stem,
+                target_path=target_path,
+                expected_import_root=_build_expected_import_root(target_path, usd_path.stem),
+            )
+        )
 
-    metadata = _read_sidecar(usd_path)
-    if metadata is None:
+    discovered.sort(key=lambda asset: (0 if asset.category == "character_body" else 1, asset.category, asset.usd_stem.lower()))
+    return discovered
+
+
+def _resolve_or_import_mesh(asset: AssetRecord):
+    _ensure_content_folder(asset.target_path)
+    _cleanup_redirectors(asset.target_path)
+
+    if unreal.EditorAssetLibrary.does_directory_exist(asset.expected_import_root):
+        _cleanup_redirectors(asset.expected_import_root)
+        if _has_redirectors(asset.expected_import_root):
+            _fail(
+                "Import folder already exists and still contains redirectors after cleanup: "
+                f"{asset.expected_import_root}. Aborting to avoid known UE rename crash."
+            )
+            return None
+
+        existing_mesh = _find_first_skeletal_mesh(asset.expected_import_root)
+        if existing_mesh is not None:
+            _log_warning(f"Skeletal mesh already exists, skipping import: {existing_mesh.get_path_name()}")
+            return existing_mesh
+
+        _fail(f"Import folder already exists but no SkeletalMesh was found: {asset.expected_import_root}.")
+        return None
+
+    imported_paths = _import_usd_asset(str(asset.usd_path), asset.target_path)
+    search_root = asset.expected_import_root if unreal.EditorAssetLibrary.does_directory_exist(asset.expected_import_root) else asset.target_path
+    mesh = _find_imported_skeletal_mesh(imported_paths, search_root)
+    if mesh is None:
+        _fail(f"Import did not produce a SkeletalMesh for {asset.usd_path} under '{asset.target_path}'.")
+    return mesh
+
+
+def _register_body_skeleton(asset: AssetRecord, mesh: unreal.SkeletalMesh, skeleton_map: dict[str, str]) -> bool:
+    current_skeleton = mesh.get_editor_property("skeleton")
+    if current_skeleton is None:
+        return _fail(f"Character body mesh has no skeleton: {mesh.get_path_name()}")
+
+    current_path = current_skeleton.get_path_name()
+    configured_path = skeleton_map.get(asset.compatible_rig)
+    if configured_path and configured_path != current_path:
+        _log_warning(
+            "Rig ID '{}' already maps to '{}'; imported body uses '{}'. Keeping configured canonical skeleton.".format(
+                asset.compatible_rig,
+                configured_path,
+                current_path,
+            )
+        )
+        return True
+
+    skeleton_map[asset.compatible_rig] = current_path
+    _log_info("Registered canonical skeleton for rig ID '{}': {}".format(asset.compatible_rig, current_path))
+    return True
+
+
+def _process_asset(asset: AssetRecord, skeleton_map: dict[str, str]) -> bool:
+    mesh = _resolve_or_import_mesh(asset)
+    if mesh is None:
         return False
 
-    category = _get_required_string(metadata, "category")
-    source_asset_name = _get_required_string(metadata, "source_asset_name")
-    compatible_rig = _get_required_string(metadata, "compatible_rig")
-    if category is None or source_asset_name is None or compatible_rig is None:
-        return False
+    if asset.category == "character_body":
+        return _register_body_skeleton(asset, mesh, skeleton_map)
 
-    target_path = _build_target_path(CONTENT_ROOT, category)
-    _log_info(f"Resolved target content path: {target_path}")
-    _ensure_content_folder(target_path)
-    _cleanup_redirectors(target_path)
-
-    canonical_skeleton_path, canonical_skeleton = _load_canonical_skeleton(compatible_rig)
+    canonical_skeleton_path, canonical_skeleton = _load_canonical_skeleton(asset.compatible_rig, skeleton_map)
     if canonical_skeleton is None or canonical_skeleton_path is None:
         return False
 
-    usd_stem = usd_path.stem
-    preferred_names = [source_asset_name, usd_stem]
-    mesh = _find_existing_skeletal_mesh(target_path, preferred_names)
-
-    # UE USD imports often generate a stable subfolder named after the USD stem.
-    # If that folder already exists, re-import can trigger fatal rename collisions
-    # when redirectors are present, so prefer reuse/abort over re-import.
-    expected_import_root = f"{target_path}/{usd_stem}"
-    if unreal.EditorAssetLibrary.does_directory_exist(expected_import_root):
-        _cleanup_redirectors(expected_import_root)
-
-        if _has_redirectors(expected_import_root):
-            return _fail(
-                "Import folder already exists and still contains redirectors after cleanup: "
-                f"{expected_import_root}. Aborting to avoid known UE rename crash. "
-                "Manually fix redirectors or delete the folder, then rerun."
-            )
-
-        if mesh is None:
-            mesh = _find_first_skeletal_mesh(expected_import_root)
-
-        if mesh is None:
-            return _fail(
-                "Import folder already exists but no SkeletalMesh was found: "
-                f"{expected_import_root}. Aborting to avoid re-import crash."
-            )
-
-    imported_paths: list[str] = []
-    if mesh is not None:
-        _log_warning(f"Skeletal mesh already exists, skipping import: {mesh.get_path_name()}")
-    else:
-        imported_paths = _import_usd_asset(str(usd_path), target_path)
-        mesh = _find_imported_skeletal_mesh(imported_paths, target_path)
-
-    if mesh is None:
-        _fail(
-            "Import did not produce a SkeletalMesh in '{}'. If your UE build does not "
-            "route USD through AssetImportTask, import once manually and rerun this script "
-            "to perform skeleton reassignment/cleanup.".format(target_path)
-        )
-        _log_warning(
-            "Alternative API path: project/plugin builds that expose USD stage import options "
-            "(for example UsdStageImportOptions + USD importer subsystem/factory) can be used "
-            "instead of AssetImportTask."
-        )
-        return False
-
-    _log_info("Beginning skeleton compatibility stage.")
-    reassigned, orphan_skeleton_path, reassign_method = _assign_canonical_skeleton(mesh, canonical_skeleton, target_path)
+    _log_info(f"Beginning skeleton compatibility stage for {asset.usd_path.name}.")
+    reassigned, duplicate_skeleton_path, reassign_method = _assign_canonical_skeleton(mesh, canonical_skeleton, asset.target_path)
     if not reassigned:
         _log_warning("Skeleton reassignment failed; duplicate skeleton was left in place.")
         return False
@@ -437,26 +575,73 @@ def run_import(usd_file_path: str) -> bool:
     unreal.EditorAssetLibrary.save_loaded_asset(mesh)
 
     _log_info("Import summary:")
-    _log_info(f"  USD: {usd_path}")
-    _log_info(f"  Metadata category: {category}")
-    _log_info(f"  Content destination: {target_path}")
+    _log_info(f"  USD: {asset.usd_path}")
+    _log_info(f"  Metadata category: {asset.category}")
+    _log_info(f"  Content destination: {asset.target_path}")
     _log_info(f"  SkeletalMesh: {mesh.get_path_name()}")
     _log_info(f"  Canonical skeleton: {canonical_skeleton_path}")
     _log_info(f"  Reassignment method: {reassign_method}")
-    if orphan_skeleton_path:
-        _log_info(f"  Duplicate skeleton detected: {orphan_skeleton_path}")
-        if reassign_method == "consolidate":
-            _log_info("  Duplicate cleanup: handled by asset consolidation")
-        elif reassign_method == "skipped":
-            _log_info("  Duplicate cleanup: skipped (skeleton reassignment disabled)")
-        else:
-            _log_info("  Duplicate cleanup: not attempted automatically")
+    if duplicate_skeleton_path:
+        _log_info(f"  Duplicate skeleton detected: {duplicate_skeleton_path}")
+        _safe_delete_if_unreferenced(duplicate_skeleton_path)
     else:
         _log_info("  Duplicate cleanup: not needed")
+
+    return True
+
+
+def run_import(library_root_path: str) -> bool:
+    _append_trace("INFO", "--- Crowd import run started ---")
+    _append_trace("INFO", f"Config LIBRARY_ROOT={library_root_path}")
+    _append_trace("INFO", f"Config CONTENT_ROOT={CONTENT_ROOT}")
+    _append_trace("INFO", f"Config ENABLE_SKELETON_REASSIGN={ENABLE_SKELETON_REASSIGN}")
+    _append_trace("INFO", f"Config REQUIRE_CANONICAL_SKELETON={REQUIRE_CANONICAL_SKELETON}")
+    _append_trace("INFO", f"Config ENABLE_CONSOLIDATE_FALLBACK={ENABLE_CONSOLIDATE_FALLBACK}")
+
+    library_root = Path(library_root_path)
+    if _LIBRARY_ROOT_ENV_VALUE:
+        _log_info(
+            f"Resolved LIBRARY_ROOT from environment variable {_LIBRARY_ROOT_ENV_VAR}: {library_root}"
+        )
+    else:
+        _log_info(
+            "Resolved LIBRARY_ROOT from Blender-matching default '~/crowd_diversity_library': "
+            f"{library_root}"
+        )
+
+    if not library_root.exists():
+        return _fail(f"Library root not found: {library_root}")
+
+    assets = _discover_assets(library_root)
+    if not assets:
+        return _fail(f"No USD assets with valid JSON sidecars were found under {library_root}")
+
+    _log_info(f"Discovered {len(assets)} asset(s) under {library_root}.")
+
+    skeleton_map = dict(SKELETON_MAP)
+    successes = 0
+    failures = 0
+
+    for asset in assets:
+        _log_info(f"Processing {asset.category} asset: {asset.usd_path.name} (rig ID: {asset.compatible_rig})")
+        if _process_asset(asset, skeleton_map):
+            successes += 1
+        else:
+            failures += 1
+
+    _log_info("Batch import summary:")
+    _log_info(f"  Library root: {library_root}")
+    _log_info(f"  Successful assets: {successes}")
+    _log_info(f"  Failed assets: {failures}")
+    _log_info(f"  Registered rig IDs: {', '.join(sorted(skeleton_map)) if skeleton_map else '<none>'}")
+
+    if failures > 0:
+        _append_trace("ERROR", "--- Crowd import run finished with failures ---")
+        return False
 
     _append_trace("INFO", "--- Crowd import run finished successfully ---")
     return True
 
 
 if __name__ == "__main__":
-    run_import(USD_FILE_PATH)
+    run_import(LIBRARY_ROOT)

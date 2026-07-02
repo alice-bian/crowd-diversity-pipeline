@@ -5,7 +5,7 @@ This project implements a practical crowd-variation pipeline that starts in Blen
 
 The approach is inspired by Sony Pictures Imageworks KPDH-style previs workflows: a small set of base characters and modular wardrobe pieces produce broad crowd diversity through combinatorics instead of one-off hero builds. Here, that idea is reimplemented with an accessible toolchain (Blender + UE5 + Python) for portfolio and production-adjacent experimentation.
 
-This repository now includes both halves of the baseline pipeline: Blender authoring/export and a UE5 editor Python importer at `ue5_pipeline/import_garment.py`.
+This repository now includes both halves of the baseline pipeline: Blender authoring/export and a UE5 editor Python importer at `ue5_pipeline/import_garment.py` that can process an exported asset library in batch.
 
 ## Architecture
 The pipeline is intentionally split into two stages: deterministic asset packaging in Blender, then deterministic assembly in UE5.
@@ -22,7 +22,7 @@ flowchart LR
 
 Operationally, all exportable parts are expected to be skinned to a single master armature before export. This is a pipeline contract, not a hardcoded rig-name restriction. Any rig can be the master as long as every interchangeable asset references the same logical rig ID in metadata.
 
-That rig contract is tracked through the `compatible_rig` field in each sidecar. Rig IDs are managed at scene level in a `Rig IDs` list, then assigned per object via dropdown in the export panel. This prevents free-text typos while keeping compatibility explicit in metadata.
+That rig contract is tracked through the `compatible_rig` field in each sidecar. Rig IDs are managed at scene level in a `Rig IDs` list, then assigned per object via dropdown in the export panel. On the UE side, character body imports are processed first and their imported skeletons become the canonical skeletons for their rig IDs unless overridden in `SKELETON_MAP`.
 
 ## Library Structure
 The extension writes one USD and one JSON file per exported asset into category folders:
@@ -70,12 +70,12 @@ Authoring and export flow:
 4. In `Selected Asset Types`, assign each selected object both a category and a compatible rig ID.
 5. Optionally run Fit Check poses (`Original`, `Neutral`, `A-Pose`, `T-Pose`) for clipping review.
 6. Export selected assets to produce USD + JSON sidecars.
-7. Import in UE5 via `ue5_pipeline/import_garment.py`.
+7. Set `LIBRARY_ROOT` in `ue5_pipeline/import_garment.py` and run the script in UE5. It discovers all exported USD+JSON pairs, imports character bodies first, registers their skeletons by rig ID, then processes garments, hair, shoes, and accessories against those canonical skeletons.
 
 ## Known Limitations
-UE5 USD skeletal mesh import generates a skeleton asset per import by default. The included UE5 Python importer handles redirector cleanup, idempotent re-runs, and canonical skeleton validation.
+UE5 USD skeletal mesh import generates a skeleton asset per import by default. The included UE5 Python importer handles redirector cleanup, idempotent re-runs, body-first canonical skeleton registration, and canonical skeleton validation.
 
-On UE5.5, skeleton reassignment APIs can be unstable in some builds/projects. The importer keeps reassignment disabled by default for crash safety (`ENABLE_SKELETON_REASSIGN = False`) and logs duplicate skeleton state for controlled follow-up.
+On UE5.5, skeleton reassignment APIs can be unstable or missing in some builds/projects. The importer prefers editor subsystem reassignment when available and falls back to guarded asset consolidation when necessary.
 
 Blender USD export has practical feature limits for this workflow: bendy bones and non-Armature deformation stacks are not reliably represented for this pipeline target. For predictable interchange, keep export assets on conventional armature-driven skinning.
 
@@ -84,7 +84,7 @@ Objects without a valid rig assignment in the managed rig list are skipped durin
 ## Multi-Rig Support (Future Work)
 The current implementation intentionally enforces a single-master-rig workflow because it is the most robust baseline for deterministic crowd swaps, and it mirrors common studio practice for large extras populations.
 
-The metadata schema already includes `compatible_rig` specifically to support a future multi-rig pipeline. In that phase, the UE5 import layer would maintain a `SKELETON_MAP` (rig ID -> UE5 skeleton path), and crowd assembly logic would validate `compatible_rig` compatibility before pairing garments with character bodies.
+The metadata schema already includes `compatible_rig` specifically to support a future multi-rig pipeline. The current importer already uses rig IDs as its routing key and accepts optional `SKELETON_MAP` overrides (rig ID -> UE5 skeleton path). A fuller multi-rig pipeline would extend that same mechanism into crowd assembly validation and selection logic.
 
 That extension is straightforward in principle but was deliberately scoped out of the first implementation to keep the initial system reliable, testable, and portfolio-demonstrable.
 
