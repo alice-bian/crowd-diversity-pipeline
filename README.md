@@ -61,6 +61,34 @@ Install as a Blender 5 extension:
 4. Point Blender at this repository root (or packaged extension zip).
 5. Enable `Crowd Diversity USD Pipeline`.
 
+## Prerequisites and Required Setup
+
+### Blender-side requirements
+
+1. Blender 5.x with this extension enabled.
+2. Export assets must be rigged/skinned to a shared logical rig contract, then assigned a `compatible_rig` value in the panel.
+3. Maintain the scene-level `Rig IDs` list and assign each selected object a valid rig ID before export.
+4. Set/confirm the Blender `Library Output` folder. The default is `~/crowd_diversity_library`.
+5. Export creates paired `.usd` + `.json` files; UE import requires both files for each asset.
+
+### UE5-side requirements
+
+Enable these plugins in your UE project before running the importer:
+
+1. `Python Editor Script Plugin` (required)
+2. `USD Importer` (required)
+
+Recommended for editor automation workflows:
+
+1. `Editor Scripting Utilities`
+
+Additional UE setup:
+
+1. Ensure your UE project can read the Blender export directory (`LIBRARY_ROOT`).
+2. Set/confirm `LIBRARY_ROOT` in `ue5_pipeline/import_garment.py`, or set the `CROWD_DIVERSITY_LIBRARY_ROOT` environment variable before launching UE.
+3. Set/confirm `CONTENT_ROOT` in `ue5_pipeline/import_garment.py` (default: `/Game`).
+4. Optional: predefine `SKELETON_MAP` entries when you need explicit rig ID -> skeleton overrides.
+
 ## Usage
 Authoring and export flow:
 
@@ -70,7 +98,21 @@ Authoring and export flow:
 4. In `Selected Asset Types`, assign each selected object both a category and a compatible rig ID.
 5. Optionally run Fit Check poses (`Original`, `Neutral`, `A-Pose`, `T-Pose`) for clipping review.
 6. Export selected assets to produce USD + JSON sidecars.
-7. Set `LIBRARY_ROOT` in `ue5_pipeline/import_garment.py` and run the script in UE5. It discovers all exported USD+JSON pairs, imports character bodies first, registers their skeletons by rig ID, then processes garments, hair, shoes, and accessories against those canonical skeletons.
+
+UE import flow:
+
+1. Open `ue5_pipeline/import_garment.py` and confirm `LIBRARY_ROOT`, `CONTENT_ROOT`, and optional flags (for example `IMPORT_ONLY_MISSING_USD`).
+2. Launch Unreal Editor for your target project.
+3. Run the script using one of these methods:
+	1. Output Log command: `py "<absolute path to repo>/ue5_pipeline/import_garment.py"`
+	2. Tools menu: Tools -> Execute Python Script... and select `ue5_pipeline/import_garment.py`
+4. The script automatically discovers USD+JSON pairs, imports character bodies first, registers canonical skeletons by `compatible_rig`, then imports/reconciles non-body assets.
+5. Re-running is idempotent when `IMPORT_ONLY_MISSING_USD=True`: already-imported USD folders are skipped.
+6. Check the UE Output Log summary for:
+	1. `Discovered USDs`
+	2. `Newly imported USDs`
+	3. `Skipped already-imported USDs`
+	4. `Successful assets` and `Failed assets`
 
 ## Known Limitations
 UE5 USD skeletal mesh import generates a skeleton asset per import by default. The included UE5 Python importer handles redirector cleanup, idempotent re-runs, body-first canonical skeleton registration, and canonical skeleton validation.

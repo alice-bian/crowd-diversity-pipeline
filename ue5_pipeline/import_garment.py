@@ -26,6 +26,10 @@ LIBRARY_ROOT = os.path.normpath(
 # Category folders (`characters`, `tops`, `hair`, etc.) are created below this.
 CONTENT_ROOT = "/Game"
 
+# If True, a USD is imported only when its mirrored target folder does not
+# already contain assets. Existing imported USD folders are skipped.
+IMPORT_ONLY_MISSING_USD = True
+
 # Optional canonical skeleton overrides by rig ID.
 #
 # Leave this empty for the generic flow: character body imports are processed
@@ -75,6 +79,13 @@ class AssetRecord:
     usd_stem: str
     target_path: str
     expected_import_root: str
+
+
+@dataclass(frozen=True)
+class ResolveResult:
+    mesh: Any | None
+    imported_new: bool
+    skipped_existing: bool
 
 
 def _log_info(message: str) -> None:
@@ -144,6 +155,25 @@ def _build_target_path(content_root: str, category: str) -> str:
 
 def _build_expected_import_root(target_path: str, usd_stem: str) -> str:
     return f"{target_path}/{usd_stem}"
+
+
+def _build_target_from_library_structure(library_root: Path, usd_path: Path) -> tuple[str, str]:
+    # Mirror the Blender-exported directory structure under CONTENT_ROOT.
+    # Example:
+    #   C:/.../crowd_diversity_library/tops/Jacket.usd -> /Game/tops + /Game/tops/Jacket
+    try:
+        rel_parent = usd_path.parent.relative_to(library_root)
+    except ValueError:
+        rel_parent = Path()
+
+    rel_parent_str = rel_parent.as_posix().strip("/")
+    if rel_parent_str:
+        target_path = f"{CONTENT_ROOT.rstrip('/')}/{rel_parent_str}"
+    else:
+        target_path = CONTENT_ROOT.rstrip("/")
+
+    expected_import_root = f"{target_path}/{usd_path.stem}"
+    return target_path, expected_import_root
 
 
 def _ensure_content_folder(content_path: str) -> None:
@@ -485,7 +515,7 @@ def _discover_assets(library_root: Path) -> list[AssetRecord]:
         if category is None or source_asset_name is None or compatible_rig is None:
             continue
 
-        target_path = _build_target_path(CONTENT_ROOT, category)
+        target_path, expected_import_root = _build_target_from_library_structure(library_root, usd_path)
         discovered.append(
             AssetRecord(
                 usd_path=usd_path,
@@ -495,7 +525,7 @@ def _discover_assets(library_root: Path) -> list[AssetRecord]:
                 compatible_rig=compatible_rig,
                 usd_stem=usd_path.stem,
                 target_path=target_path,
-                expected_import_root=_build_expected_import_root(target_path, usd_path.stem),
+                expected_import_root=expected_import_root,
             )
         )
 
@@ -503,33 +533,42 @@ def _discover_assets(library_root: Path) -> list[AssetRecord]:
     return discovered
 
 
-def _resolve_or_import_mesh(asset: AssetRecord):
+def _resolve_or_import_mesh(asset: AssetRecord) -> ResolveResult:
     _ensure_content_folder(asset.target_path)
     _cleanup_redirectors(asset.target_path)
 
     if unreal.EditorAssetLibrary.does_directory_exist(asset.expected_import_root):
+        existing_assets = unreal.EditorAssetLibrary.list_assets(asset.expected_import_root, recursive=True, include_folder=False)
+        if IMPORT_ONLY_MISSING_USD and existing_assets:
+            _log_info(f"USD already imported; skipping: {asset.usd_path}")
+            return ResolveResult(
+                mesh=_find_first_skeletal_mesh(asset.expected_import_root),
+                imported_new=False,
+                skipped_existing=True,
+            )
+
         _cleanup_redirectors(asset.expected_import_root)
         if _has_redirectors(asset.expected_import_root):
             _fail(
                 "Import folder already exists and still contains redirectors after cleanup: "
                 f"{asset.expected_import_root}. Aborting to avoid known UE rename crash."
             )
-            return None
+            return ResolveResult(mesh=None, imported_new=False, skipped_existing=False)
 
         existing_mesh = _find_first_skeletal_mesh(asset.expected_import_root)
         if existing_mesh is not None:
             _log_warning(f"Skeletal mesh already exists, skipping import: {existing_mesh.get_path_name()}")
-            return existing_mesh
+            return ResolveResult(mesh=existing_mesh, imported_new=False, skipped_existing=True)
 
         _fail(f"Import folder already exists but no SkeletalMesh was found: {asset.expected_import_root}.")
-        return None
+        return ResolveResult(mesh=None, imported_new=False, skipped_existing=False)
 
     imported_paths = _import_usd_asset(str(asset.usd_path), asset.target_path)
     search_root = asset.expected_import_root if unreal.EditorAssetLibrary.does_directory_exist(asset.expected_import_root) else asset.target_path
     mesh = _find_imported_skeletal_mesh(imported_paths, search_root)
     if mesh is None:
         _fail(f"Import did not produce a SkeletalMesh for {asset.usd_path} under '{asset.target_path}'.")
-    return mesh
+    return ResolveResult(mesh=mesh, imported_new=True, skipped_existing=False)
 
 
 def _register_body_skeleton(asset: AssetRecord, mesh: unreal.SkeletalMesh, skeleton_map: dict[str, str]) -> bool:
@@ -554,23 +593,25 @@ def _register_body_skeleton(asset: AssetRecord, mesh: unreal.SkeletalMesh, skele
     return True
 
 
-def _process_asset(asset: AssetRecord, skeleton_map: dict[str, str]) -> bool:
-    mesh = _resolve_or_import_mesh(asset)
+def _process_asset(asset: AssetRecord, skeleton_map: dict[str, str]) -> tuple[bool, bool, bool]:
+    resolved = _resolve_or_import_mesh(asset)
+    mesh = resolved.mesh
     if mesh is None:
-        return False
+        return False, resolved.imported_new, resolved.skipped_existing
 
     if asset.category == "character_body":
-        return _register_body_skeleton(asset, mesh, skeleton_map)
+        ok = _register_body_skeleton(asset, mesh, skeleton_map)
+        return ok, resolved.imported_new, resolved.skipped_existing
 
     canonical_skeleton_path, canonical_skeleton = _load_canonical_skeleton(asset.compatible_rig, skeleton_map)
     if canonical_skeleton is None or canonical_skeleton_path is None:
-        return False
+        return False, resolved.imported_new, resolved.skipped_existing
 
     _log_info(f"Beginning skeleton compatibility stage for {asset.usd_path.name}.")
     reassigned, duplicate_skeleton_path, reassign_method = _assign_canonical_skeleton(mesh, canonical_skeleton, asset.target_path)
     if not reassigned:
         _log_warning("Skeleton reassignment failed; duplicate skeleton was left in place.")
-        return False
+        return False, resolved.imported_new, resolved.skipped_existing
 
     unreal.EditorAssetLibrary.save_loaded_asset(mesh)
 
@@ -587,7 +628,7 @@ def _process_asset(asset: AssetRecord, skeleton_map: dict[str, str]) -> bool:
     else:
         _log_info("  Duplicate cleanup: not needed")
 
-    return True
+    return True, resolved.imported_new, resolved.skipped_existing
 
 
 def run_import(library_root_path: str) -> bool:
@@ -621,16 +662,27 @@ def run_import(library_root_path: str) -> bool:
     skeleton_map = dict(SKELETON_MAP)
     successes = 0
     failures = 0
+    imported_new_count = 0
+    skipped_existing_count = 0
 
     for asset in assets:
         _log_info(f"Processing {asset.category} asset: {asset.usd_path.name} (rig ID: {asset.compatible_rig})")
-        if _process_asset(asset, skeleton_map):
+        ok, imported_new, skipped_existing = _process_asset(asset, skeleton_map)
+        if imported_new:
+            imported_new_count += 1
+        if skipped_existing:
+            skipped_existing_count += 1
+
+        if ok:
             successes += 1
         else:
             failures += 1
 
     _log_info("Batch import summary:")
     _log_info(f"  Library root: {library_root}")
+    _log_info(f"  Discovered USDs: {len(assets)}")
+    _log_info(f"  Newly imported USDs: {imported_new_count}")
+    _log_info(f"  Skipped already-imported USDs: {skipped_existing_count}")
     _log_info(f"  Successful assets: {successes}")
     _log_info(f"  Failed assets: {failures}")
     _log_info(f"  Registered rig IDs: {', '.join(sorted(skeleton_map)) if skeleton_map else '<none>'}")
