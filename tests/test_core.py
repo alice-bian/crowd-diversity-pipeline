@@ -10,14 +10,24 @@ from crowd_diversity_pipeline.core import (
     CATEGORY_FOLDERS,
     build_export_output_path,
     build_metadata,
+    get_addon_id,
     write_metadata_sidecar,
 )
 
 
 class TestCore(unittest.TestCase):
     def test_category_folders_are_mapped(self):
+        self.assertEqual(CATEGORY_FOLDERS["character_body"], "characters")
         self.assertEqual(CATEGORY_FOLDERS["top"], "tops")
         self.assertEqual(CATEGORY_FOLDERS["accessory"], "accessories")
+
+    def test_get_addon_id_resolution(self):
+        self.assertEqual(get_addon_id("crowd_diversity_pipeline"), "crowd_diversity_pipeline")
+        self.assertEqual(
+            get_addon_id("my_extension.crowd_diversity_pipeline"),
+            "my_extension",
+        )
+        self.assertEqual(get_addon_id(None), "crowd_diversity_pipeline")
 
     def test_build_export_output_path_uses_category_folder(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

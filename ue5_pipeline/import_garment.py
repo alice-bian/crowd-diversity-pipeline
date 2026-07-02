@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -57,7 +58,12 @@ ENABLE_CONSOLIDATE_FALLBACK = True
 RUN_POST_CLEANUP_MAINTENANCE = True
 
 # Crash/debug trace written outside the project so it survives editor crashes.
-TRACE_LOG_PATH = "C:/Users/Public/crowd_import_trace.log"
+# Override with CROWD_IMPORT_TRACE_LOG if you want a custom path.
+_TRACE_LOG_ENV_VAR = "CROWD_IMPORT_TRACE_LOG"
+_TRACE_LOG_ENV_VALUE = os.environ.get(_TRACE_LOG_ENV_VAR)
+TRACE_LOG_PATH = _TRACE_LOG_ENV_VALUE or str(
+    Path(tempfile.gettempdir()) / "crowd_import_trace.log"
+)
 
 CATEGORY_TO_FOLDER = {
     "character_body": "characters",
@@ -404,6 +410,21 @@ def _try_subsystem_skeleton_assignment(mesh: unreal.SkeletalMesh, canonical_skel
         _log_warning("SkeletalMeshEditorSubsystem exposes no skeleton-related Python methods in this build.")
 
     candidate_methods = ["assign_skeleton", "set_skeletal_mesh_skeleton", "set_skeleton"]
+    method_signatures: dict[str, list[tuple[str, tuple[Any, ...], dict[str, Any]]]] = {
+        "assign_skeleton": [
+            ("mesh,skeleton", (mesh, canonical_skeleton), {}),
+            ("kw(skeletal_mesh,skeleton)", (), {"skeletal_mesh": mesh, "skeleton": canonical_skeleton}),
+        ],
+        "set_skeletal_mesh_skeleton": [
+            ("mesh,skeleton", (mesh, canonical_skeleton), {}),
+            ("kw(skeletal_mesh,skeleton)", (), {"skeletal_mesh": mesh, "skeleton": canonical_skeleton}),
+            ("kw(skeletal_mesh,new_skeleton)", (), {"skeletal_mesh": mesh, "new_skeleton": canonical_skeleton}),
+        ],
+        "set_skeleton": [
+            ("mesh,skeleton", (mesh, canonical_skeleton), {}),
+            ("kw(mesh,skeleton)", (), {"mesh": mesh, "skeleton": canonical_skeleton}),
+        ],
+    }
 
     def _check_success() -> bool:
         reloaded_mesh = unreal.EditorAssetLibrary.load_asset(mesh.get_path_name())
@@ -418,7 +439,7 @@ def _try_subsystem_skeleton_assignment(mesh: unreal.SkeletalMesh, canonical_skel
         try:
             method(*args, **kwargs)
         except Exception as exc:
-            _log_warning(f"{method_name} {call_label} failed: {exc}")
+            _log_info(f"{method_name} {call_label} failed: {exc}")
             return False
         if _check_success():
             _log_info(f"Skeleton reassigned via SkeletalMeshEditorSubsystem.{method_name} ({call_label}).")
@@ -429,24 +450,14 @@ def _try_subsystem_skeleton_assignment(mesh: unreal.SkeletalMesh, canonical_skel
         if not hasattr(subsystem, method_name):
             continue
         method = getattr(subsystem, method_name)
-        if _try_call(method, method_name, "mesh,skeleton", mesh, canonical_skeleton):
-            return True
-        if _try_call(method, method_name, "skeleton,mesh", canonical_skeleton, mesh):
-            return True
-        if _try_call(method, method_name, "[mesh],skeleton", [mesh], canonical_skeleton):
-            return True
-        if _try_call(method, method_name, "skeleton,[mesh]", canonical_skeleton, [mesh]):
-            return True
-        if _try_call(method, method_name, "kw(skeletal_mesh,skeleton)", skeletal_mesh=mesh, skeleton=canonical_skeleton):
-            return True
-        if _try_call(method, method_name, "kw(mesh,skeleton)", mesh=mesh, skeleton=canonical_skeleton):
-            return True
-        if _try_call(method, method_name, "kw(skeletal_meshes,skeleton)", skeletal_meshes=[mesh], skeleton=canonical_skeleton):
-            return True
-        if _try_call(method, method_name, "kw(meshes,skeleton)", meshes=[mesh], skeleton=canonical_skeleton):
-            return True
-        if _try_call(method, method_name, "kw(skeletal_mesh,new_skeleton)", skeletal_mesh=mesh, new_skeleton=canonical_skeleton):
-            return True
+        signatures = method_signatures.get(method_name, [])
+        for call_label, args, kwargs in signatures:
+            if _try_call(method, method_name, call_label, *args, **kwargs):
+                return True
+
+    _log_warning(
+        "No working SkeletalMeshEditorSubsystem skeleton assignment signature was found in this build."
+    )
     return False
 
 
