@@ -8,6 +8,7 @@ except ImportError:  # pragma: no cover - exercised in plain Python test environ
 from .core import CATEGORY_LABELS, get_addon_id
 
 if bpy is not None:
+    from bpy.app.handlers import persistent
     from .operators import CROWD_OT_AddRig, CROWD_OT_ExportAssets, CROWD_OT_RemoveRig, CROWD_OT_RunFitCheck
     from .ui import CROWD_PT_Panel, CROWD_Preferences
 
@@ -60,6 +61,31 @@ if bpy is not None:
             scene.crowd_diversity_rigs_index = 0
 
 
+    def _initialize_default_scene_rigs() -> None:
+        scenes = getattr(getattr(bpy, "data", None), "scenes", None)
+        if scenes is None:
+            return
+
+        for scene in scenes:
+            _ensure_default_scene_rig(scene)
+
+
+    @persistent
+    def _on_load_post(_dummy) -> None:
+        _initialize_default_scene_rigs()
+
+
+    def _schedule_default_scene_rig_init() -> None:
+        def _timer_callback():
+            _initialize_default_scene_rigs()
+            return None
+
+        try:
+            bpy.app.timers.register(_timer_callback, first_interval=0.0)
+        except Exception:
+            pass
+
+
 def register() -> None:
     if bpy is None:
         return
@@ -101,8 +127,10 @@ def register() -> None:
         items=_rig_enum_items,
     )
 
-    for scene in bpy.data.scenes:
-        _ensure_default_scene_rig(scene)
+    if _on_load_post not in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.append(_on_load_post)
+
+    _schedule_default_scene_rig_init()
 
 
 def unregister() -> None:
@@ -114,6 +142,9 @@ def unregister() -> None:
     del bpy.types.Scene.crowd_diversity_fit_check_pose
     del bpy.types.Scene.crowd_diversity_rigs_index
     del bpy.types.Scene.crowd_diversity_rigs
+
+    if _on_load_post in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(_on_load_post)
 
     for cls in reversed((
         CROWD_PT_Panel,

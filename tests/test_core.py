@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from crowd_diversity_pipeline.core import (
+from blender_pipeline.core import (
     CATEGORY_FOLDERS,
     build_export_output_path,
     build_metadata,
@@ -25,6 +25,10 @@ class TestCore(unittest.TestCase):
         self.assertEqual(get_addon_id("crowd_diversity_pipeline"), "crowd_diversity_pipeline")
         self.assertEqual(
             get_addon_id("my_extension.crowd_diversity_pipeline"),
+            "my_extension",
+        )
+        self.assertEqual(
+            get_addon_id("my_extension.blender_pipeline"),
             "my_extension",
         )
         self.assertEqual(get_addon_id(None), "crowd_diversity_pipeline")

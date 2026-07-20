@@ -53,6 +53,8 @@ def get_addon_id(module_package: str | None) -> str:
     package_name = module_package or ""
     if package_name.endswith(".crowd_diversity_pipeline") and package_name != "crowd_diversity_pipeline":
         return package_name[: -len(".crowd_diversity_pipeline")]
+    if package_name.endswith(".blender_pipeline") and package_name != "blender_pipeline":
+        return package_name[: -len(".blender_pipeline")]
     return "crowd_diversity_pipeline"
 
 
