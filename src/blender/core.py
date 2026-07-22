@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -149,7 +149,7 @@ def build_metadata(
         "exclusivity_tags": exclusivity_tags or [],
         "compatible_rig": compatible_rig or "mixamo_v1",
         "source_file": source_file or bpy.data.filepath or "",
-        "export_date": datetime.utcnow().isoformat() + "Z",
+        "export_date": datetime.now(UTC).isoformat(),
         "blender_version": bpy.app.version_string,
         "source_asset_name": object_name,
     }
