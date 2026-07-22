@@ -1,4 +1,4 @@
-# Blender UE5 USD Crowd Pipeline
+# Blender-UE5 USD Crowd Pipeline
 
 ## Project Overview
 This project implements a practical crowd-variation pipeline that starts in Blender and targets Unreal Engine 5. The Blender extension exports rigged character bodies, clothing, hair, shoes, and accessories as USD assets plus JSON metadata sidecars, so downstream tools can assemble large visual variety from reusable parts.

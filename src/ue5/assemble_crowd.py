@@ -70,6 +70,12 @@ TRACE_LOG_PATH = "C:/Users/Public/crowd_assemble_trace.log"
 # Example class path: "/Game/BP/BP_CrowdAgent.BP_CrowdAgent_C"
 BLUEPRINT_AGENT_CLASS_PATH: str | None = None
 
+# When True, if Actor.add_component_by_class is unavailable and no Blueprint
+# fallback is configured, the script uses SkeletalMeshActor-based assembly.
+# In this mode each agent is represented by one body SkeletalMeshActor plus
+# zero or more garment SkeletalMeshActors driven by leader pose.
+ENABLE_MULTI_ACTOR_FALLBACK = True
+
 # Slot names expected on the optional Blueprint fallback actor. If your
 # Blueprint uses different component names, adjust these values.
 BLUEPRINT_COMPONENT_NAMES: dict[str, str] = {
@@ -91,6 +97,13 @@ LIBRARY_ROOT = os.path.normpath(
 
 # Outfit randomization controls.
 GARMENT_PRESENCE_PROBABILITY = 0.7
+# When False (default), if a category has available assets, one is always chosen.
+# When True, categories can be randomly left empty using GARMENT_PRESENCE_PROBABILITY.
+ALLOW_EMPTY_GARMENT_CATEGORIES = False
+# When True, every spawned agent must include a top garment.
+REQUIRE_TOP_COVERAGE = True
+# When True, every spawned agent must include a bottom garment.
+REQUIRE_BOTTOM_COVERAGE = True
 RECENT_COMBO_FRACTION = 0.1
 
 
@@ -292,7 +305,7 @@ def _category_pick(
     if not pool:
         return None
 
-    if rng.random() > GARMENT_PRESENCE_PROBABILITY:
+    if ALLOW_EMPTY_GARMENT_CATEGORIES and rng.random() > GARMENT_PRESENCE_PROBABILITY:
         return None
 
     compatible_options = [
@@ -343,6 +356,26 @@ def _propose_agent_spec(pools: dict[str, list[AssetInfo]], rng: random.Random) -
     ]
     for category in garment_categories:
         garments[category] = _category_pick(category, pools[category], used_tags, rng)
+
+    if REQUIRE_TOP_COVERAGE and pools["top"] and garments.get("top") is None:
+        compatible_tops = [
+            asset for asset in pools["top"] if not any(tag in used_tags for tag in asset.exclusivity_tags)
+        ]
+        if compatible_tops:
+            top_asset = rng.choice(compatible_tops)
+            garments["top"] = top_asset
+            for tag in top_asset.exclusivity_tags:
+                used_tags.add(tag)
+
+    if REQUIRE_BOTTOM_COVERAGE and pools["bottom"] and garments.get("bottom") is None:
+        compatible_bottoms = [
+            asset for asset in pools["bottom"] if not any(tag in used_tags for tag in asset.exclusivity_tags)
+        ]
+        if compatible_bottoms:
+            bottom_asset = rng.choice(compatible_bottoms)
+            garments["bottom"] = bottom_asset
+            for tag in bottom_asset.exclusivity_tags:
+                used_tags.add(tag)
 
     _apply_slot_exclusivity(garments, rng)
     return AgentSpec(
@@ -511,6 +544,12 @@ def _destroy_actor_safely(actor) -> None:
         pass
 
 
+def _destroy_actors_safely(actors: list[Any]) -> None:
+    for actor in reversed(actors):
+        if actor is not None:
+            _destroy_actor_safely(actor)
+
+
 def _save_current_level() -> bool:
     # Preferred in UE5.5+: LevelEditorSubsystem.save_current_level.
     level_subsystem = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
@@ -580,6 +619,20 @@ def _load_skeletal_mesh(mesh_path: str):
     return asset
 
 
+def _get_skeletal_component_from_actor(actor):
+    try:
+        component = actor.get_editor_property("skeletal_mesh_component")
+        if component is not None:
+            return component
+    except Exception:
+        pass
+
+    components = _get_skeletal_mesh_components(actor)
+    if components:
+        return components[0]
+    return None
+
+
 def run_assembly() -> bool:
     _append_trace("INFO", "--- Crowd assembly run started ---")
     _log_info(f"Config CONTENT_ROOT={CONTENT_ROOT}")
@@ -588,6 +641,9 @@ def run_assembly() -> bool:
     _log_info(f"Config AGENT_COUNT={AGENT_COUNT}")
     _log_info(f"Config RANDOM_SEED={RANDOM_SEED}")
     _log_info(f"Config ANIMATION_ASSET_PATHS={len(ANIMATION_ASSET_PATHS)} entries")
+    _log_info(f"Config ALLOW_EMPTY_GARMENT_CATEGORIES={ALLOW_EMPTY_GARMENT_CATEGORIES}")
+    _log_info(f"Config REQUIRE_TOP_COVERAGE={REQUIRE_TOP_COVERAGE}")
+    _log_info(f"Config REQUIRE_BOTTOM_COVERAGE={REQUIRE_BOTTOM_COVERAGE}")
 
     rng = random.Random(RANDOM_SEED)
     grouped = _discover_assets()
@@ -608,17 +664,36 @@ def run_assembly() -> bool:
                 "That category will be empty across the crowd."
             )
 
+    if REQUIRE_TOP_COVERAGE and not pools["top"]:
+        return _fail(
+            "No 'top' assets are available for the target rig, but REQUIRE_TOP_COVERAGE=True. "
+            "Import tops for this rig or disable REQUIRE_TOP_COVERAGE."
+        )
+
+    if REQUIRE_BOTTOM_COVERAGE and not pools["bottom"]:
+        return _fail(
+            "No 'bottom' assets are available for the target rig, but REQUIRE_BOTTOM_COVERAGE=True. "
+            "Import bottoms for this rig or disable REQUIRE_BOTTOM_COVERAGE."
+        )
+
     specs = _generate_agent_specs(pools, AGENT_COUNT, rng)
     loaded_animations = _load_animation_assets()
     spawn_class = _resolve_spawn_class()
     using_blueprint_slots = bool(BLUEPRINT_AGENT_CLASS_PATH)
+    use_multi_actor_fallback = False
 
     if not using_blueprint_slots and not hasattr(unreal.Actor, "add_component_by_class"):
-        return _fail(
-            "This UE build does not expose Actor.add_component_by_class in Python. "
-            "Set BLUEPRINT_AGENT_CLASS_PATH to a Blueprint actor with SkeletalMeshComponent slots "
-            "(Body, Hair, Top, Bottom, Shoes, Accessory), then rerun."
-        )
+        if ENABLE_MULTI_ACTOR_FALLBACK:
+            use_multi_actor_fallback = True
+            _log_warning(
+                "Actor.add_component_by_class is unavailable. Using SkeletalMeshActor multi-actor fallback mode."
+            )
+        else:
+            return _fail(
+                "This UE build does not expose Actor.add_component_by_class in Python. "
+                "Set BLUEPRINT_AGENT_CLASS_PATH to a Blueprint actor with SkeletalMeshComponent slots "
+                "(Body, Hair, Top, Bottom, Shoes, Accessory), or enable ENABLE_MULTI_ACTOR_FALLBACK, then rerun."
+            )
 
     spawned = 0
     failed = 0
@@ -626,8 +701,6 @@ def run_assembly() -> bool:
     combo_keys: set[tuple[str, ...]] = set()
 
     for index, spec in enumerate(specs):
-        combo_keys.add(_combo_key(spec.body, spec.garments))
-
         body_mesh = _load_skeletal_mesh(spec.body.content_path)
         if body_mesh is None:
             message = f"Body mesh missing/unloadable for agent {index}: {spec.body.content_path}"
@@ -638,10 +711,18 @@ def run_assembly() -> bool:
             return _fail(message)
 
         location, rotation = _build_transform(index, rng)
-        actor = _spawn_actor(spawn_class, location, rotation)
+        created_actors: list[Any] = []
+
+        if use_multi_actor_fallback:
+            actor = _spawn_actor(unreal.SkeletalMeshActor, location, rotation)
+        else:
+            actor = _spawn_actor(spawn_class, location, rotation)
+
         if actor is None:
             failed += 1
             continue
+
+        created_actors.append(actor)
 
         if using_blueprint_slots:
             body_component_name = BLUEPRINT_COMPONENT_NAMES["character_body"]
@@ -651,21 +732,32 @@ def run_assembly() -> bool:
                     f"Blueprint fallback actor is missing body component '{body_component_name}' for agent {index}."
                 )
                 failed += 1
-                _destroy_actor_safely(actor)
+                _destroy_actors_safely(created_actors)
                 continue
             if not _set_component_mesh(body_component, body_mesh):
                 failed += 1
-                _destroy_actor_safely(actor)
+                _destroy_actors_safely(created_actors)
+                continue
+        elif use_multi_actor_fallback:
+            body_component = _get_skeletal_component_from_actor(actor)
+            if body_component is None:
+                _log_error(f"SkeletalMeshActor body component missing for agent {index}.")
+                failed += 1
+                _destroy_actors_safely(created_actors)
+                continue
+            if not _set_component_mesh(body_component, body_mesh):
+                failed += 1
+                _destroy_actors_safely(created_actors)
                 continue
         else:
             body_component = _add_skeletal_mesh_component(actor, f"Body_{index}")
             if body_component is None:
                 failed += 1
-                _destroy_actor_safely(actor)
+                _destroy_actors_safely(created_actors)
                 continue
             if not _set_component_mesh(body_component, body_mesh):
                 failed += 1
-                _destroy_actor_safely(actor)
+                _destroy_actors_safely(created_actors)
                 continue
 
         animation_asset = (
@@ -716,11 +808,29 @@ def run_assembly() -> bool:
                     )
                     continue
 
-                garment_component = _add_skeletal_mesh_component(actor, f"{category}_{index}")
-                if garment_component is None:
-                    _log_error(f"Failed to add garment component for agent {index}, category '{category}'.")
-                    agent_failed = True
-                    break
+                if use_multi_actor_fallback:
+                    garment_actor = _spawn_actor(unreal.SkeletalMeshActor, location, rotation)
+                    if garment_actor is None:
+                        _log_error(
+                            f"Failed to spawn garment SkeletalMeshActor for agent {index}, category '{category}'."
+                        )
+                        agent_failed = True
+                        break
+
+                    created_actors.append(garment_actor)
+                    garment_component = _get_skeletal_component_from_actor(garment_actor)
+                    if garment_component is None:
+                        _log_error(
+                            f"Spawned garment actor has no SkeletalMeshComponent for agent {index}, category '{category}'."
+                        )
+                        agent_failed = True
+                        break
+                else:
+                    garment_component = _add_skeletal_mesh_component(actor, f"{category}_{index}")
+                    if garment_component is None:
+                        _log_error(f"Failed to add garment component for agent {index}, category '{category}'.")
+                        agent_failed = True
+                        break
 
                 if not _set_component_mesh(garment_component, garment_mesh):
                     agent_failed = True
@@ -731,7 +841,7 @@ def run_assembly() -> bool:
 
         if agent_failed:
             failed += 1
-            _destroy_actor_safely(actor)
+            _destroy_actors_safely(created_actors)
             continue
 
         try:
@@ -740,6 +850,7 @@ def run_assembly() -> bool:
         except Exception:
             pass
 
+        combo_keys.add(_combo_key(spec.body, spec.garments))
         spawned += 1
 
     # UE may require the current level to be an existing saved level package.
@@ -748,7 +859,7 @@ def run_assembly() -> bool:
         _log_info("Current level saved.")
     else:
         _log_warning(
-            "Could not save current level automatically. Ensure the level has been saved at least once."
+            "Could not save current level automatically. Save the map once with File -> Save Current Level As..., then rerun to enable auto-save."
         )
 
     _log_info("Crowd assembly summary:")
