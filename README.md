@@ -3,7 +3,7 @@
 ## Project Overview
 This project implements a practical crowd-variation pipeline that starts in Blender and targets Unreal Engine 5. The Blender extension exports rigged character bodies, clothing, hair, shoes, and accessories as USD assets plus JSON metadata sidecars, so downstream tools can assemble large visual variety from reusable parts.
 
-The approach is inspired by Sony Pictures Imageworks *K-Pop Demon Hunters* (KPDH)-style previs workflow, where the priority is enabling real-time crowd visualization early in previs and layout, rather than waiting for final crowd builds. This project reimplements that idea with an accessible Blender + UE5 + Python toolchain so teams can block crowd intent quickly, iterate in context, and refine decisions before later production passes.
+The approach is inspired by the Sony Pictures Imageworks *K-Pop Demon Hunters* (KPDH)-style previs workflow, where the priority is enabling real-time crowd visualization early in previs and layout, rather than waiting for final crowd builds. This project reimplements that idea with an accessible Blender + UE5 + Python toolchain so teams can block crowd intent quickly, iterate in context, and refine decisions before later production passes.
 
 Reference Article: [Reimagining previs and layout for K-pop Demon Hunters with Unreal Engine](https://www.unrealengine.com/spotlights/reimagining-previs-and-layout-for-kpop-demon-hunters-with-unreal-engine)
 
