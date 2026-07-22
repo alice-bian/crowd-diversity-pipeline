@@ -6,11 +6,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from blender_pipeline.core import (
+from src.blender.core import (
     CATEGORY_FOLDERS,
     build_export_output_path,
     build_metadata,
     get_addon_id,
+    get_preferences_bl_idname,
     write_metadata_sidecar,
 )
 
@@ -28,10 +29,32 @@ class TestCore(unittest.TestCase):
             "my_extension",
         )
         self.assertEqual(
-            get_addon_id("my_extension.blender_pipeline"),
+            get_addon_id("my_extension.src.blender"),
             "my_extension",
         )
+        self.assertEqual(
+            get_addon_id("bl_ext.user_default.crowd_diversity_pipeline"),
+            "crowd_diversity_pipeline",
+        )
+        self.assertEqual(
+            get_addon_id("bl_ext.user_default.crowd_diversity_pipeline.src.blender"),
+            "crowd_diversity_pipeline",
+        )
         self.assertEqual(get_addon_id(None), "crowd_diversity_pipeline")
+
+    def test_get_preferences_bl_idname_resolution(self):
+        self.assertEqual(
+            get_preferences_bl_idname("bl_ext.user_default.crowd_diversity_pipeline"),
+            "bl_ext.user_default.crowd_diversity_pipeline",
+        )
+        self.assertEqual(
+            get_preferences_bl_idname("bl_ext.user_default.crowd_diversity_pipeline.src.blender"),
+            "bl_ext.user_default.crowd_diversity_pipeline",
+        )
+        self.assertEqual(
+            get_preferences_bl_idname("my_extension.src.blender"),
+            "my_extension",
+        )
 
     def test_build_export_output_path_uses_category_folder(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

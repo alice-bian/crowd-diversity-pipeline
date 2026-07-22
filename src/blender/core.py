@@ -51,21 +51,48 @@ DEFAULT_SLOTS = {
 
 def get_addon_id(module_package: str | None) -> str:
     package_name = module_package or ""
+    if package_name.startswith("bl_ext.") and package_name.endswith(".crowd_diversity_pipeline"):
+        return "crowd_diversity_pipeline"
+    if package_name.startswith("bl_ext.") and ".crowd_diversity_pipeline." in package_name:
+        return "crowd_diversity_pipeline"
     if package_name.endswith(".crowd_diversity_pipeline") and package_name != "crowd_diversity_pipeline":
         return package_name[: -len(".crowd_diversity_pipeline")]
-    if package_name.endswith(".blender_pipeline") and package_name != "blender_pipeline":
-        return package_name[: -len(".blender_pipeline")]
+    if package_name.endswith(".src.blender") and package_name != "src.blender":
+        return package_name[: -len(".src.blender")]
     return "crowd_diversity_pipeline"
+
+
+def get_preferences_bl_idname(module_package: str | None) -> str:
+    package_name = module_package or ""
+
+    # Blender extensions are mounted under namespaces like:
+    #   bl_ext.user_default.crowd_diversity_pipeline
+    # AddonPreferences.bl_idname must match that extension module key.
+    if package_name.startswith("bl_ext.") and ".crowd_diversity_pipeline" in package_name:
+        marker = ".crowd_diversity_pipeline"
+        marker_index = package_name.find(marker)
+        return package_name[: marker_index + len(marker)]
+
+    if package_name.endswith(".src.blender") and package_name != "src.blender":
+        return package_name[: -len(".src.blender")]
+
+    return get_addon_id(module_package)
 
 
 ADDON_ID = get_addon_id(__package__ or __name__)
 
 
 def find_addon_preferences(context, module_package: str | None = None):
+    preference_id = get_preferences_bl_idname(module_package)
     addon_id = get_addon_id(module_package)
     package_name = module_package or ""
 
-    for key in (addon_id, package_name, "crowd_diversity_pipeline"):
+    lookup_keys: list[str] = []
+    for key in (preference_id, addon_id, package_name, "crowd_diversity_pipeline"):
+        if key and key not in lookup_keys:
+            lookup_keys.append(key)
+
+    for key in lookup_keys:
         if not key:
             continue
         addon = context.preferences.addons.get(key)
@@ -75,6 +102,15 @@ def find_addon_preferences(context, module_package: str | None = None):
     for key, addon in context.preferences.addons.items():
         if "crowd_diversity" in key and addon.preferences is not None:
             return addon.preferences
+
+    # Last-resort fallback for extension namespace changes: identify our
+    # preferences object by the expected property shape.
+    for _key, addon in context.preferences.addons.items():
+        prefs = getattr(addon, "preferences", None)
+        if prefs is None:
+            continue
+        if hasattr(prefs, "library_root"):
+            return prefs
 
     return None
 

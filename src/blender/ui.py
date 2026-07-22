@@ -4,9 +4,10 @@ import os
 
 import bpy
 
-from .core import find_addon_preferences, get_addon_id
+from .core import find_addon_preferences, get_addon_id, get_preferences_bl_idname
 
 ADDON_ID = get_addon_id(__package__ or __name__)
+PREFERENCES_ID = get_preferences_bl_idname(__package__ or __name__)
 
 
 def _normalize_windows_dir_path(path_value: str) -> str:
@@ -22,7 +23,7 @@ def _update_library_root(self, _context: bpy.types.Context) -> None:
 
 
 class CROWD_Preferences(bpy.types.AddonPreferences):
-    bl_idname = ADDON_ID
+    bl_idname = PREFERENCES_ID
 
     library_root: bpy.props.StringProperty(
         name="Library Root",

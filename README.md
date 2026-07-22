@@ -5,7 +5,7 @@ This project implements a practical crowd-variation pipeline that starts in Blen
 
 The approach is inspired by Sony Pictures Imageworks KPDH-style previs workflows: a small set of base characters and modular wardrobe pieces produce broad crowd diversity through combinatorics instead of one-off hero builds. Here, that idea is reimplemented with an accessible toolchain (Blender + UE5 + Python) for portfolio and production-adjacent experimentation.
 
-This repository now includes both halves of the baseline pipeline: Blender authoring/export and a UE5 editor Python importer at `ue5_pipeline/import_garment.py` that can process an exported asset library in batch.
+This repository now includes both halves of the baseline pipeline: Blender authoring/export and a UE5 editor Python importer at `src/ue5/import_garment.py` that can process an exported asset library in batch. The project is organized under `src/blender` and `src/ue5`.
 
 ## Architecture
 The pipeline is intentionally split into two stages: deterministic asset packaging in Blender, then deterministic assembly in UE5.
@@ -58,7 +58,7 @@ Install as a Blender 5 extension:
 1. Open Blender 5.x.
 2. Navigate to Edit -> Preferences -> Add-ons.
 3. Select Install from Disk.
-4. Point Blender at this repository root (or packaged extension zip).
+4. Point Blender at `src/blender` (or a packaged zip whose root contains `blender_manifest.toml` and `__init__.py`).
 5. Enable `Crowd Diversity USD Pipeline`.
 
 ## Prerequisites and Required Setup
@@ -85,8 +85,8 @@ Recommended for editor automation workflows:
 Additional UE setup:
 
 1. Ensure your UE project can read the Blender export directory (`LIBRARY_ROOT`).
-2. Set/confirm `LIBRARY_ROOT` in `ue5_pipeline/import_garment.py`, or set the `CROWD_DIVERSITY_LIBRARY_ROOT` environment variable before launching UE.
-3. Set/confirm `CONTENT_ROOT` in `ue5_pipeline/import_garment.py` (default: `/Game`).
+2. Set/confirm `LIBRARY_ROOT` in `src/ue5/import_garment.py`, or set the `CROWD_DIVERSITY_LIBRARY_ROOT` environment variable before launching UE.
+3. Set/confirm `CONTENT_ROOT` in `src/ue5/import_garment.py` (default: `/Game`).
 4. Optional: predefine `SKELETON_MAP` entries when you need explicit rig ID -> skeleton overrides.
 
 ## Usage
@@ -101,11 +101,11 @@ Authoring and export flow:
 
 UE import flow:
 
-1. Open `ue5_pipeline/import_garment.py` and confirm `LIBRARY_ROOT`, `CONTENT_ROOT`, and optional flags (for example `IMPORT_ONLY_MISSING_USD`).
+1. Open `src/ue5/import_garment.py` and confirm `LIBRARY_ROOT`, `CONTENT_ROOT`, and optional flags (for example `IMPORT_ONLY_MISSING_USD`).
 2. Launch Unreal Editor for your target project.
 3. Run the script using one of these methods:
-	1. Output Log command: `py "<absolute path to repo>/ue5_pipeline/import_garment.py"`
-	2. Tools menu: Tools -> Execute Python Script... and select `ue5_pipeline/import_garment.py`
+	1. Output Log command: `py "<absolute path to repo>/src/ue5/import_garment.py"`
+	2. Tools menu: Tools -> Execute Python Script... and select `src/ue5/import_garment.py`
 4. The script automatically discovers USD+JSON pairs, imports character bodies first, registers canonical skeletons by `compatible_rig`, then imports/reconciles non-body assets.
 5. Re-running is idempotent when `IMPORT_ONLY_MISSING_USD=True`: already-imported USD folders are skipped.
 6. Check the UE Output Log summary for:
