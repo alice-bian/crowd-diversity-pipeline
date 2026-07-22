@@ -22,6 +22,8 @@ A JSON sidecar is just a small metadata file saved next to each USD file (same a
 
 For assets to remain interchangeable, body and clothing pieces must share the same rig setup and be exported with the same logical rig ID in metadata. This contract is tracked through the `compatible_rig` field in each sidecar: rig IDs are managed at scene level in a `Rig IDs` list, then assigned per object via dropdown in the export panel. On the UE side, character body imports are processed first and their imported skeletons become the canonical skeletons for their rig IDs unless overridden in `SKELETON_MAP`.
 
+Crowd assembly on the UE side is metadata-driven. It filters by target rig ID, groups imported assets by category, randomly picks from those categories for each character instance, and enforces slot/exclusivity rules so incompatible items are not worn together. It also enforces required coverage policies (for example top/bottom garments), then spawns and links body/garment meshes so they animate as one character. In UE5.5 builds where dynamic component APIs are limited, assembly automatically falls back to a multi-actor SkeletalMeshActor path to preserve compatibility.
+
 ## Library Structure
 The extension writes one USD and one JSON file per exported asset into category folders:
 
