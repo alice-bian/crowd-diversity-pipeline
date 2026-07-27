@@ -1,13 +1,23 @@
 schema_version = "1.0.0"
+
 id = "crowd_diversity_pipeline"
 version = "1.0.0"
 name = "Crowd Diversity USD Pipeline"
 tagline = "Batch export rigged garments as USD assets with JSON metadata and simple fit-check poses."
 maintainer = "Alice <alicebian@alumni.upenn.edu>"
 type = "add-on"
+
+# Optional list defined by Blender and server, see:
+# https://docs.blender.org/manual/en/dev/advanced/extensions/tags.html
+tags = ["Animation"]
+
 blender_version_min = "5.0.0"
-license = ["SPDX:GPL-3.0-or-later"]
+
+# License conforming to https://spdx.org/licenses/
+# https://docs.blender.org/manual/en/dev/advanced/extensions/licenses.html
+license = [
+  "SPDX:GPL-3.0-or-later",
+]
 
 [permissions]
-# Allow the add-on to create and update the user-selected USD asset library folders.
 files = "Create and update the user-selected USD asset library on disk"

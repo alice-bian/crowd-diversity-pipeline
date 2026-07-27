@@ -26,6 +26,25 @@ For assets to remain interchangeable, body and clothing pieces must share the sa
 
 Crowd assembly on the UE side is metadata-driven. It filters by target rig ID, groups imported assets by category, randomly picks from those categories for each character instance, and enforces slot/exclusivity rules so incompatible items are not worn together. It also enforces required coverage policies (for example top/bottom garments), then spawns and links body/garment meshes so they animate as one character. In UE5.5 builds where dynamic component APIs are limited, assembly automatically falls back to a multi-actor SkeletalMeshActor path to preserve compatibility.
 
+## Source Layout
+
+Code layout:
+
+```text
+/src
+	/blender
+		__init__.py            # entrypoint, delegates to auto_load
+		auto_load.py           # class discovery + class registration order
+		runtime.py             # property/handler lifecycle registration
+		core.py                # shared constants + metadata/path helpers
+		operators.py           # export/fit-check/rig-list operators
+		ui.py                  # AddonPreferences + View3D sidebar panel
+		blender_manifest.toml  # Blender extension metadata
+	/ue5
+		import_garment.py      # USD + metadata import and skeleton handling
+		assemble_crowd.py      # metadata-driven crowd assembly in level
+```
+
 ## Library Structure
 The extension writes one USD and one JSON file per exported asset into category folders:
 
@@ -62,6 +81,16 @@ Install as a Blender 5 extension:
 3. Select Install from Disk.
 4. Point Blender at `src/blender` (or a packaged zip whose root contains `blender_manifest.toml` and `__init__.py`).
 5. Enable `Crowd Diversity USD Pipeline`.
+
+## Development Reload Workflow
+
+When developing in VS Code with the Blender Development extension:
+
+1. Open this repo in VS Code and run `Blender: Start`.
+2. Enable setting `blender.addon.reloadOnSave` if you want save-triggered auto-reload.
+3. Use `Blender: Reload Addons` for a manual reload when needed.
+
+If Blender was installed from a copied zip and not linked through the VS Code extension workflow, saves in the repo may not live-update that installed copy until you reinstall/reload.
 
 ## Prerequisites and Required Setup
 
@@ -117,7 +146,14 @@ UE import flow:
 	4. `Successful assets` and `Failed assets`
 
 ## Verification
-Core pure-Python export and metadata logic is covered in `tests/test_core.py`, including category path mapping, output path generation, and sidecar serialization behavior.
+`src/blender/core.py` imports `bpy` directly, so verification is performed inside Blender.
+
+Recommended verification approach:
+
+1. Reload the extension in Blender and confirm the `Crowd Diversity` sidebar panel appears.
+2. Verify add-on preferences load and `Library Root` is editable.
+3. Export at least one mesh and confirm paired `.usd` + `.json` outputs are written.
+4. Run `src/ue5/import_garment.py` and confirm the UE import summary reports discovered/imported assets.
 
 ## Known Limitations
 UE5 USD skeletal mesh import generates a skeleton asset per import by default. The included UE5 Python importer handles redirector cleanup, idempotent re-runs, body-first canonical skeleton registration, and canonical skeleton validation.

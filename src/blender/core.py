@@ -6,20 +6,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-try:
-    import bpy
-except ImportError:  # pragma: no cover - exercised in plain Python test environments
-    class _BpyStub:
-        class _App:
-            version_string = "unknown"
+import bpy
 
-        class _Data:
-            filepath = ""
-
-        app = _App()
-        data = _Data()
-
-    bpy = _BpyStub()
+DEFAULT_ADDON_ID = "crowd_diversity_pipeline"
 
 CATEGORY_FOLDERS = {
     "character_body": "characters",
@@ -51,15 +40,17 @@ DEFAULT_SLOTS = {
 
 def get_addon_id(module_package: str | None) -> str:
     package_name = module_package or ""
-    if package_name.startswith("bl_ext.") and package_name.endswith(".crowd_diversity_pipeline"):
-        return "crowd_diversity_pipeline"
-    if package_name.startswith("bl_ext.") and ".crowd_diversity_pipeline." in package_name:
-        return "crowd_diversity_pipeline"
-    if package_name.endswith(".crowd_diversity_pipeline") and package_name != "crowd_diversity_pipeline":
-        return package_name[: -len(".crowd_diversity_pipeline")]
-    if package_name.endswith(".src.blender") and package_name != "src.blender":
-        return package_name[: -len(".src.blender")]
-    return "crowd_diversity_pipeline"
+    marker = f".{DEFAULT_ADDON_ID}"
+
+    if package_name.startswith("bl_ext.") and package_name.endswith(marker):
+        return DEFAULT_ADDON_ID
+    if package_name.startswith("bl_ext.") and f"{marker}." in package_name:
+        return DEFAULT_ADDON_ID
+    if package_name.endswith(marker) and package_name != DEFAULT_ADDON_ID:
+        return package_name[: -len(marker)]
+    if package_name.endswith(".src.blender2") and package_name != "src.blender2":
+        return package_name[: -len(".src.blender2")]
+    return DEFAULT_ADDON_ID
 
 
 def get_preferences_bl_idname(module_package: str | None) -> str:
@@ -68,13 +59,13 @@ def get_preferences_bl_idname(module_package: str | None) -> str:
     # Blender extensions are mounted under namespaces like:
     #   bl_ext.user_default.crowd_diversity_pipeline
     # AddonPreferences.bl_idname must match that extension module key.
-    if package_name.startswith("bl_ext.") and ".crowd_diversity_pipeline" in package_name:
-        marker = ".crowd_diversity_pipeline"
+    marker = f".{DEFAULT_ADDON_ID}"
+    if package_name.startswith("bl_ext.") and marker in package_name:
         marker_index = package_name.find(marker)
         return package_name[: marker_index + len(marker)]
 
-    if package_name.endswith(".src.blender") and package_name != "src.blender":
-        return package_name[: -len(".src.blender")]
+    if package_name.endswith(".src.blender2") and package_name != "src.blender2":
+        return package_name[: -len(".src.blender2")]
 
     return get_addon_id(module_package)
 
@@ -88,7 +79,7 @@ def find_addon_preferences(context, module_package: str | None = None):
     package_name = module_package or ""
 
     lookup_keys: list[str] = []
-    for key in (preference_id, addon_id, package_name, "crowd_diversity_pipeline"):
+    for key in (preference_id, addon_id, package_name, DEFAULT_ADDON_ID):
         if key and key not in lookup_keys:
             lookup_keys.append(key)
 
