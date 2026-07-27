@@ -1,17 +1,11 @@
 from __future__ import annotations
 
-try:
-    import bpy
-except ImportError:  # pragma: no cover - exercised in plain Python test environments
-    bpy = None
-
 from .core import CATEGORY_LABELS, get_addon_id
+import bpy
+from bpy.app.handlers import persistent
 
-if bpy is not None:
-    from bpy.app.handlers import persistent
-    from .operators import CROWD_OT_AddRig, CROWD_OT_ExportAssets, CROWD_OT_RemoveRig, CROWD_OT_RunFitCheck
-    from .ui import CROWD_PT_Panel, CROWD_Preferences
-
+from .operators import CROWD_OT_AddRig, CROWD_OT_ExportAssets, CROWD_OT_RemoveRig, CROWD_OT_RunFitCheck
+from .ui import CROWD_PT_Panel, CROWD_Preferences
 
 ADDON_ID = get_addon_id(__package__ or __name__)
 
@@ -27,69 +21,65 @@ def _get_library_root(context) -> str:
     return prefs.preferences.library_root
 
 
-if bpy is not None:
-    class CrowdRigIDItem(bpy.types.PropertyGroup):
-        name: bpy.props.StringProperty(name="Rig ID", default="mixamo_v1")
+class CrowdRigIDItem(bpy.types.PropertyGroup):
+    name: bpy.props.StringProperty(name="Rig ID", default="mixamo_v1")
 
 
-    _RIG_ENUM_ITEMS_CACHE: list[tuple[str, str, str]] = []
+_RIG_ENUM_ITEMS_CACHE: list[tuple[str, str, str]] = []
 
 
-    def _rig_enum_items(_self, context):
-        # Keep a module-level cache because Blender can retain raw pointers to enum strings.
-        # This avoids the known dynamic EnumProperty item lifetime/GC instability.
-        global _RIG_ENUM_ITEMS_CACHE
+def _rig_enum_items(_self, context):
+    # Keep a module-level cache because Blender can retain raw pointers to enum strings.
+    # This avoids the known dynamic EnumProperty item lifetime/GC instability.
+    global _RIG_ENUM_ITEMS_CACHE
 
-        items: list[tuple[str, str, str]] = []
-        if context is not None and getattr(context, "scene", None) is not None:
-            for rig in context.scene.crowd_diversity_rigs:
-                rig_name = rig.name.strip()
-                if rig_name:
-                    items.append((rig_name, rig_name, ""))
+    items: list[tuple[str, str, str]] = []
+    if context is not None and getattr(context, "scene", None) is not None:
+        for rig in context.scene.crowd_diversity_rigs:
+            rig_name = rig.name.strip()
+            if rig_name:
+                items.append((rig_name, rig_name, ""))
 
-        if not items:
-            items.append(("", "(No rigs defined)", ""))
+    if not items:
+        items.append(("", "(No rigs defined)", ""))
 
-        _RIG_ENUM_ITEMS_CACHE = items
-        return _RIG_ENUM_ITEMS_CACHE
-
-
-    def _ensure_default_scene_rig(scene: bpy.types.Scene) -> None:
-        if len(scene.crowd_diversity_rigs) == 0:
-            item = scene.crowd_diversity_rigs.add()
-            item.name = "mixamo_v1"
-            scene.crowd_diversity_rigs_index = 0
+    _RIG_ENUM_ITEMS_CACHE = items
+    return _RIG_ENUM_ITEMS_CACHE
 
 
-    def _initialize_default_scene_rigs() -> None:
-        scenes = getattr(getattr(bpy, "data", None), "scenes", None)
-        if scenes is None:
-            return
-
-        for scene in scenes:
-            _ensure_default_scene_rig(scene)
+def _ensure_default_scene_rig(scene: bpy.types.Scene) -> None:
+    if len(scene.crowd_diversity_rigs) == 0:
+        item = scene.crowd_diversity_rigs.add()
+        item.name = "mixamo_v1"
+        scene.crowd_diversity_rigs_index = 0
 
 
-    @persistent
-    def _on_load_post(_dummy) -> None:
+def _initialize_default_scene_rigs() -> None:
+    scenes = getattr(getattr(bpy, "data", None), "scenes", None)
+    if scenes is None:
+        return
+
+    for scene in scenes:
+        _ensure_default_scene_rig(scene)
+
+
+@persistent
+def _on_load_post(_dummy) -> None:
+    _initialize_default_scene_rigs()
+
+
+def _schedule_default_scene_rig_init() -> None:
+    def _timer_callback():
         _initialize_default_scene_rigs()
+        return None
 
-
-    def _schedule_default_scene_rig_init() -> None:
-        def _timer_callback():
-            _initialize_default_scene_rigs()
-            return None
-
-        try:
-            bpy.app.timers.register(_timer_callback, first_interval=0.0)
-        except Exception:
-            pass
+    try:
+        bpy.app.timers.register(_timer_callback, first_interval=0.0)
+    except Exception:
+        pass
 
 
 def register() -> None:
-    if bpy is None:
-        return
-
     for cls in (
         CrowdRigIDItem,
         CROWD_Preferences,
@@ -134,9 +124,6 @@ def register() -> None:
 
 
 def unregister() -> None:
-    if bpy is None:
-        return
-
     del bpy.types.Object.crowd_diversity_category
     del bpy.types.Object.crowd_diversity_compatible_rig
     del bpy.types.Scene.crowd_diversity_fit_check_pose

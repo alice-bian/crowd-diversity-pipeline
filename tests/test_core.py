@@ -1,19 +1,23 @@
 import json
-import sys
 import tempfile
 import unittest
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+_ROOT = Path(__file__).resolve().parents[1]
+_CORE_PATH = _ROOT / "src" / "blender" / "core.py"
+_CORE_SPEC = spec_from_file_location("blender_core_for_tests", _CORE_PATH)
+if _CORE_SPEC is None or _CORE_SPEC.loader is None:
+    raise RuntimeError(f"Unable to load core module from {_CORE_PATH}")
+_CORE_MODULE = module_from_spec(_CORE_SPEC)
+_CORE_SPEC.loader.exec_module(_CORE_MODULE)
 
-from src.blender.core import (
-    CATEGORY_FOLDERS,
-    build_export_output_path,
-    build_metadata,
-    get_addon_id,
-    get_preferences_bl_idname,
-    write_metadata_sidecar,
-)
+CATEGORY_FOLDERS = _CORE_MODULE.CATEGORY_FOLDERS
+build_export_output_path = _CORE_MODULE.build_export_output_path
+build_metadata = _CORE_MODULE.build_metadata
+get_addon_id = _CORE_MODULE.get_addon_id
+get_preferences_bl_idname = _CORE_MODULE.get_preferences_bl_idname
+write_metadata_sidecar = _CORE_MODULE.write_metadata_sidecar
 
 
 class TestCore(unittest.TestCase):
