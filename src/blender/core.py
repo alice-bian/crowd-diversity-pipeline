@@ -48,8 +48,8 @@ def get_addon_id(module_package: str | None) -> str:
         return DEFAULT_ADDON_ID
     if package_name.endswith(marker) and package_name != DEFAULT_ADDON_ID:
         return package_name[: -len(marker)]
-    if package_name.endswith(".src.blender2") and package_name != "src.blender2":
-        return package_name[: -len(".src.blender2")]
+    if package_name.endswith(".src.blender") and package_name != "src.blender":
+        return package_name[: -len(".src.blender")]
     return DEFAULT_ADDON_ID
 
 
@@ -64,8 +64,8 @@ def get_preferences_bl_idname(module_package: str | None) -> str:
         marker_index = package_name.find(marker)
         return package_name[: marker_index + len(marker)]
 
-    if package_name.endswith(".src.blender2") and package_name != "src.blender2":
-        return package_name[: -len(".src.blender2")]
+    if package_name.endswith(".src.blender") and package_name != "src.blender":
+        return package_name[: -len(".src.blender")]
 
     return get_addon_id(module_package)
 

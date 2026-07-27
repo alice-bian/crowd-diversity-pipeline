@@ -1,8 +1,15 @@
 import json
+import sys
 import tempfile
+import types
 import unittest
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+
+_BPy_STUB = types.ModuleType("bpy")
+_BPy_STUB.app = types.SimpleNamespace(version_string="unknown")
+_BPy_STUB.data = types.SimpleNamespace(filepath="")
+sys.modules.setdefault("bpy", _BPy_STUB)
 
 _ROOT = Path(__file__).resolve().parents[1]
 _CORE_PATH = _ROOT / "src" / "blender" / "core.py"
